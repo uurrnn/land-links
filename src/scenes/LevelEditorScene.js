@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { isoToScreen } from '../utils/IsoUtils.js';
+import { isoToScreen, screenToIso } from '../utils/IsoUtils.js';
 import { 
     GRID_SIZE, 
     TILE_SIZE, 
@@ -15,12 +15,14 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.gridData = [];
         this.selectedTileType = 'grass';
         this.tileGroup = null;
+        this.tileSprites = []; // Optimization for tile access
         
         // State Management
         this.editorState = 'IDLE'; // IDLE, PLACING_TEE, CONSTRUCTING
         this.course = { holes: [] };
         this.currentHole = null;
         this.popup = null;
+        this.viewRotation = 0; // 0: 0deg, 1: 90deg, 2: 180deg, 3: 270deg
     }
 
     preload() {
@@ -54,6 +56,9 @@ export default class LevelEditorScene extends Phaser.Scene {
         
         // Prevent click propagation to game
         this.popup.setInteractive(new Phaser.Geom.Rectangle(0, 0, 150, 80), Phaser.Geom.Rectangle.Contains);
+        
+        this.uiCamera.ignore(this.popup);
+        if (this.bgCamera) this.bgCamera.ignore(this.popup);
     }
 
     editHole(hole) {
@@ -85,7 +90,8 @@ export default class LevelEditorScene extends Phaser.Scene {
                 fill: '#ffffff', 
                 backgroundColor: '#000000',
                 padding: { x: 10, y: 5 }
-            }).setOrigin(0.5).setScrollFactor(0).setAlpha(0).setDepth(20000);
+            }).setOrigin(0.5).setAlpha(0).setDepth(20000);
+            this.uiContainer.add(this.notificationText);
         }
         
         this.notificationText.setText(message);
@@ -102,12 +108,38 @@ export default class LevelEditorScene extends Phaser.Scene {
 
     create() {
         this.setupWorldAndCamera();
+        
+        // World Container (Zoomable/Rotatable)
+        this.worldContainer = this.add.container(0, 0);
+        
+        // UI Container (Static)
+        this.uiContainer = this.add.container(0, 0);
+        this.uiContainer.setScrollFactor(0); // Extra safety
+
         this.createBackground();
         this.createGrid();
         this.createTilemap();
         this.createUI();
         this.createPreviewActor();
         this.setupInput();
+
+        // Background Camera (Bottom)
+        this.bgCamera = this.cameras.add(0, 0, this.cameras.main.width, this.cameras.main.height);
+        
+        // UI Camera (Top)
+        this.uiCamera = this.cameras.add(0, 0, this.cameras.main.width, this.cameras.main.height);
+
+        // Manually reorder cameras: [bgCamera, mainCamera, uiCamera]
+        this.cameras.cameras = [this.bgCamera, this.cameras.main, this.uiCamera];
+        
+        // Ignore Rules (Using containers is much more robust)
+        this.cameras.main.ignore([this.bg, this.uiContainer]);
+        this.bgCamera.ignore([this.worldContainer, this.uiContainer, this.previewActor]);
+        this.uiCamera.ignore([this.bg, this.worldContainer, this.previewActor]);
+    }
+
+    createBackground() {
+        this.bg = this.add.tileSprite(0, 0, this.cameras.main.width, this.cameras.main.height, 'bg').setOrigin(0).setScrollFactor(0);
     }
 
     update(time, delta) {
@@ -126,7 +158,7 @@ export default class LevelEditorScene extends Phaser.Scene {
 
             gfx.clear();
             gfx.fillStyle(color);
-            gfx.lineStyle(1, 0x000000, .01);
+            gfx.lineStyle(1, 0x0b6e0b, 0.1);
     
             // Draw diamond shape
             gfx.beginPath();
@@ -235,16 +267,18 @@ export default class LevelEditorScene extends Phaser.Scene {
     setupWorldAndCamera() {
         const worldWidth = GRID_SIZE.width * TILE_SIZE.width;
         const worldHeight = GRID_SIZE.height * TILE_SIZE.height;
-        this.cameras.main.setBounds(0, 0, worldWidth, worldHeight);
-        this.physics.world.setBounds(0, 0, worldWidth, worldHeight);
+        const margin = 1000;
+
+        this.cameras.main.setBounds(-margin, -margin, worldWidth + margin * 2, worldHeight + margin * 2);
+        this.physics.world.setBounds(-margin, -margin, worldWidth + margin * 2, worldHeight + margin * 2);
 
         const centerX = (GRID_SIZE.width * TILE_SIZE.width) / 2;
-        const centerY = 0; 
+        const centerY = worldHeight / 4; // Start a bit higher up for isometric view
         this.cameras.main.centerOn(centerX, centerY);
     }
 
     createBackground() {
-        this.add.tileSprite(0, 0, this.physics.world.bounds.width * 2, this.physics.world.bounds.height * 2, 'bg').setOrigin(0.5);
+        this.bg = this.add.tileSprite(0, 0, this.cameras.main.width, this.cameras.main.height, 'bg').setOrigin(0).setScrollFactor(0);
     }
 
     createGrid() {
@@ -262,8 +296,8 @@ export default class LevelEditorScene extends Phaser.Scene {
     }
 
     createTilemap() {
-        this.tileGroup = this.add.group();
         for (let y = 0; y < GRID_SIZE.height; y++) {
+            this.tileSprites[y] = [];
             for (let x = 0; x < GRID_SIZE.width; x++) {
                 const isoPos = this.gridToIso(x, y);
                 const tile = this.add.sprite(isoPos.x, isoPos.y, this.gridData[y][x].type);
@@ -271,15 +305,8 @@ export default class LevelEditorScene extends Phaser.Scene {
                 tile.setData('gridX', x);
                 tile.setData('gridY', y);
                 
-                // Define isometric hit area (Diamond shape)
                 const halfW = TILE_SIZE.width / 2;
                 const halfH = TILE_SIZE.height / 2;
-                // Vertices relative to the sprite's top-left (assuming 0.5 origin means we need to offset)
-                // Actually, if origin is 0.5, 0.5, the hit area coordinates are relative to the center? 
-                // Phaser Geoms usually expect coordinates relative to the Game Object's top-left if input.hitArea is used?
-                // Let's check docs/standard behavior. Usually setInteractive with shape uses local coord system (top-left 0,0).
-                // If origin is 0.5, the texture's (0,0) is at -width/2, -height/2.
-                // But setInteractive usually maps the shape to the texture frame.
                 
                 const shape = new Phaser.Geom.Polygon([
                     halfW, 0,                 // Top
@@ -289,7 +316,8 @@ export default class LevelEditorScene extends Phaser.Scene {
                 ]);
                 tile.setInteractive(shape, Phaser.Geom.Polygon.Contains);
 
-                this.tileGroup.add(tile);
+                this.worldContainer.add(tile);
+                this.tileSprites[y][x] = tile;
             }
         }
     }
@@ -304,15 +332,17 @@ export default class LevelEditorScene extends Phaser.Scene {
         uiPanel.fillRect(0, 0, 250, this.cameras.main.height);
         uiPanel.lineStyle(2, 0x4a90e2, 0.5);
         uiPanel.strokeLineShape(new Phaser.Geom.Line(250, 0, 250, this.cameras.main.height));
-        uiPanel.setScrollFactor(0);
         uiPanel.setDepth(uiDepth);
+        uiPanel.setInteractive(new Phaser.Geom.Rectangle(0, 0, 250, this.cameras.main.height), Phaser.Geom.Rectangle.Contains);
+        this.uiContainer.add(uiPanel);
 
         let yPos = 20;
         const xPos = 25;
         const btnWidth = 200;
 
         // --- ACTIONS ---
-        this.add.text(xPos, yPos, 'ACTIONS', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setScrollFactor(0).setDepth(uiDepth);
+        const actionsLabel = this.add.text(xPos, yPos, 'ACTIONS', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.uiContainer.add(actionsLabel);
         yPos += 20;
 
         const newHoleBtn = this.add.text(xPos, yPos, '+ NEW HOLE', { 
@@ -325,8 +355,8 @@ export default class LevelEditorScene extends Phaser.Scene {
             fontStyle: 'bold'
         })
         .setInteractive({ useHandCursor: true })
-        .setScrollFactor(0)
         .setDepth(uiDepth);
+        this.uiContainer.add(newHoleBtn);
         
         newHoleBtn.on('pointerdown', () => this.startNewHole());
         newHoleBtn.on('pointerover', () => newHoleBtn.setAlpha(0.8));
@@ -335,7 +365,8 @@ export default class LevelEditorScene extends Phaser.Scene {
         yPos += 50;
 
         // --- HOLE ELEMENTS ---
-        this.add.text(xPos, yPos, 'HOLE ELEMENTS', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setScrollFactor(0).setDepth(uiDepth);
+        const holeLabel = this.add.text(xPos, yPos, 'HOLE ELEMENTS', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.uiContainer.add(holeLabel);
         yPos += 20;
 
         const holeElements = ['tee', 'green', 'cup'];
@@ -348,17 +379,15 @@ export default class LevelEditorScene extends Phaser.Scene {
                 fixedWidth: btnWidth
             })
             .setInteractive({ useHandCursor: true })
-            .setScrollFactor(0)
             .setDepth(uiDepth);
             
-            this.uiButtons[type] = btn; // Store reference
+            this.uiButtons[type] = btn;
+            this.uiContainer.add(btn);
 
             btn.on('pointerdown', () => {
                 this.selectedTileType = type;
                 this.updateButtonStyles();
             });
-            // Removed hover effects here to avoid conflict with selection style
-            // We can add them back if we check selection status inside hover
 
             yPos += 30;
         });
@@ -366,7 +395,8 @@ export default class LevelEditorScene extends Phaser.Scene {
         yPos += 20;
 
         // --- TERRAIN ---
-        this.add.text(xPos, yPos, 'TERRAIN', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setScrollFactor(0).setDepth(uiDepth);
+        const terrainLabel = this.add.text(xPos, yPos, 'TERRAIN', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.uiContainer.add(terrainLabel);
         yPos += 20;
 
         const tileTypes = ['grass', 'fairway', 'sand', 'water', 'rough'];
@@ -379,10 +409,10 @@ export default class LevelEditorScene extends Phaser.Scene {
                 fixedWidth: btnWidth
             })
             .setInteractive({ useHandCursor: true })
-            .setScrollFactor(0)
             .setDepth(uiDepth);
             
             this.uiButtons[type] = btn;
+            this.uiContainer.add(btn);
 
             btn.on('pointerdown', () => {
                 this.selectedTileType = type;
@@ -395,19 +425,22 @@ export default class LevelEditorScene extends Phaser.Scene {
         yPos += 20;
 
         // --- ELEVATION ---
-        this.add.text(xPos, yPos, 'ELEVATION', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setScrollFactor(0).setDepth(uiDepth);
+        const elevationLabel = this.add.text(xPos, yPos, 'ELEVATION', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.uiContainer.add(elevationLabel);
         yPos += 20;
         
         const upBtn = this.add.text(xPos, yPos, 'RAISE (+)', { 
             fontSize: '14px', fill: '#fff', backgroundColor: '#333', padding: { x: 10, y: 5 }, fixedWidth: 95, align: 'center' 
-        }).setInteractive({ useHandCursor: true }).setScrollFactor(0).setDepth(uiDepth);
+        }).setInteractive({ useHandCursor: true }).setDepth(uiDepth);
         
         const downBtn = this.add.text(xPos + 105, yPos, 'LOWER (-)', { 
             fontSize: '14px', fill: '#fff', backgroundColor: '#333', padding: { x: 10, y: 5 }, fixedWidth: 95, align: 'center' 
-        }).setInteractive({ useHandCursor: true }).setScrollFactor(0).setDepth(uiDepth);
+        }).setInteractive({ useHandCursor: true }).setDepth(uiDepth);
         
         this.uiButtons['height_up'] = upBtn;
         this.uiButtons['height_down'] = downBtn;
+        this.uiContainer.add(upBtn);
+        this.uiContainer.add(downBtn);
 
         upBtn.on('pointerdown', () => {
             this.selectedTileType = 'height_up';
@@ -422,7 +455,8 @@ export default class LevelEditorScene extends Phaser.Scene {
         yPos += 40;
 
         // --- DECORATIONS ---
-        this.add.text(xPos, yPos, 'DECORATIONS', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setScrollFactor(0).setDepth(uiDepth);
+        const decoLabel = this.add.text(xPos, yPos, 'DECORATIONS', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.uiContainer.add(decoLabel);
         yPos += 20;
 
         DECO_NAMES.filter(name => name !== 'cup').forEach(type => {
@@ -434,10 +468,10 @@ export default class LevelEditorScene extends Phaser.Scene {
                 fixedWidth: btnWidth
             })
             .setInteractive({ useHandCursor: true })
-            .setScrollFactor(0)
             .setDepth(uiDepth);
 
             this.uiButtons[type] = btn;
+            this.uiContainer.add(btn);
 
             btn.on('pointerdown', () => {
                 this.selectedTileType = type;
@@ -473,7 +507,9 @@ export default class LevelEditorScene extends Phaser.Scene {
             up: Phaser.Input.Keyboard.KeyCodes.W,
             left: Phaser.Input.Keyboard.KeyCodes.A,
             down: Phaser.Input.Keyboard.KeyCodes.S,
-            right: Phaser.Input.Keyboard.KeyCodes.D
+            right: Phaser.Input.Keyboard.KeyCodes.D,
+            rotLeft: Phaser.Input.Keyboard.KeyCodes.Q,
+            rotRight: Phaser.Input.Keyboard.KeyCodes.E
         });
         
         let isDragging = false;
@@ -547,6 +583,21 @@ export default class LevelEditorScene extends Phaser.Scene {
             if (this.previewActor) this.previewActor.setVisible(false);
         });
 
+        // Zoom Control
+        this.input.on('wheel', (pointer, gameObjects, deltaX, deltaY, deltaZ) => {
+            const zoomAmount = 0.1;
+            const minZoom = 0.5;
+            const maxZoom = 2.0;
+
+            if (deltaY > 0) {
+                // Zoom Out
+                this.cameras.main.zoom = Math.max(minZoom, this.cameras.main.zoom - zoomAmount);
+            } else {
+                // Zoom In
+                this.cameras.main.zoom = Math.min(maxZoom, this.cameras.main.zoom + zoomAmount);
+            }
+        });
+
         // Pause functionality
         this.input.keyboard.on('keydown-ESC', () => {
             this.scene.pause();
@@ -557,6 +608,71 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.input.keyboard.on('keydown-H', () => {
             this.finalizeHole();
         });
+
+        // Discrete Rotation
+        this.input.keyboard.on('keydown-Q', () => this.rotateWorld(-1));
+        this.input.keyboard.on('keydown-E', () => this.rotateWorld(1));
+    }
+
+    rotateWorld(dir) {
+        if (this.popup) {
+            this.popup.destroy();
+            this.popup = null;
+        }
+        if (this.previewActor) {
+            this.previewActor.setVisible(false);
+        }
+
+        const cam = this.cameras.main;
+        // 1. Get current world center
+        const center = cam.getWorldPoint(cam.width / 2, cam.height / 2);
+        // 2. Map to logical grid point
+        const logical = this.worldToGrid(center.x, center.y);
+
+        // 3. Perform rotation
+        this.viewRotation = (this.viewRotation + dir + 4) % 4;
+        this.refreshAllTiles();
+
+        // 4. Center on same logical point in new view
+        const newPos = this.gridToIso(logical.x, logical.y);
+        cam.centerOn(newPos.x, newPos.y);
+
+        this.showNotification(`View Rotated: ${this.viewRotation * 90} deg`, '#ffffff');
+    }
+
+    worldToGrid(wx, wy) {
+        const centerX = (GRID_SIZE.width * TILE_SIZE.width) / 2;
+        const raw = screenToIso(wx, wy, TILE_SIZE.width, TILE_SIZE.height, centerX, 0);
+        
+        let x = raw.x;
+        let y = raw.y;
+        const maxW = GRID_SIZE.width - 1;
+        const maxH = GRID_SIZE.height - 1;
+
+        // Reverse the rotation transformation to get original logical grid
+        switch(this.viewRotation) {
+            case 1: // 90 deg clockwise (rx = y, ry = maxW - x)
+                x = maxW - raw.y;
+                y = raw.x;
+                break;
+            case 2: // 180 deg (rx = maxW - x, ry = maxH - y)
+                x = maxW - raw.x;
+                y = maxH - raw.y;
+                break;
+            case 3: // 270 deg (rx = maxH - y, ry = x)
+                x = raw.y;
+                y = maxH - raw.x;
+                break;
+        }
+        return { x, y };
+    }
+
+    refreshAllTiles() {
+        for (let y = 0; y < GRID_SIZE.height; y++) {
+            for (let x = 0; x < GRID_SIZE.width; x++) {
+                this.refreshTile(x, y);
+            }
+        }
     }
 
     finalizeHole() {
@@ -706,6 +822,7 @@ export default class LevelEditorScene extends Phaser.Scene {
             const isoPos = this.gridToIso(gridX, gridY, this.gridData[gridY][gridX].height);
             const deco = this.add.sprite(isoPos.x, isoPos.y, decoType);
             deco.setOrigin(0.5, 1);
+            this.worldContainer.add(deco); // Ensure UI camera ignores it
 
             this.gridData[gridY][gridX].decoration = deco;
 
@@ -776,7 +893,7 @@ export default class LevelEditorScene extends Phaser.Scene {
     }
     
     refreshTile(x, y) {
-        const tile = this.tileGroup.getChildren().find(t => t.getData('gridX') === x && t.getData('gridY') === y);
+        const tile = this.tileSprites[y][x];
         if (tile) {
             tile.setTexture(this.gridData[y][x].type);
             const isoPos = this.gridToIso(x, y, this.gridData[y][x].height);
@@ -806,17 +923,20 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.checklistPanel.lineStyle(2, 0xffffff, 1);
         this.checklistPanel.fillRoundedRect(x, y, width, height, 10);
         this.checklistPanel.strokeRoundedRect(x, y, width, height, 10);
-        this.checklistPanel.setScrollFactor(0);
         this.checklistPanel.setDepth(uiDepth);
+        this.checklistPanel.setInteractive(new Phaser.Geom.Rectangle(x, y, width, height), Phaser.Geom.Rectangle.Contains);
+        this.uiContainer.add(this.checklistPanel);
 
         this.checklistTitle = this.add.text(x + 105, y + 20, '', { fontSize: '16px', fill: '#fff', fontStyle: 'bold' })
-            .setOrigin(0.5).setScrollFactor(0).setDepth(uiDepth);
+            .setOrigin(0.5).setDepth(uiDepth);
+        this.uiContainer.add(this.checklistTitle);
         
         this.checkItems = [];
         const items = ['Place Tee', 'Place Cup', 'Build Hole', 'Press H to Finish'];
         items.forEach((item, index) => {
-            const text = this.add.text(x + 20, y + 50 + (index * 25), `[ ] ${item}`, { fontSize: '14px', fill: '#888' }).setScrollFactor(0).setDepth(uiDepth);
+            const text = this.add.text(x + 20, y + 50 + (index * 25), `[ ] ${item}`, { fontSize: '14px', fill: '#888' }).setDepth(uiDepth);
             this.checkItems.push({ key: item, obj: text });
+            this.uiContainer.add(text);
         });
 
         this.updateChecklist();
@@ -857,6 +977,7 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.previewActor.setAlpha(0.5);
         this.previewActor.setVisible(false);
         this.previewActor.setDepth(5000); // High but below UI
+        this.worldContainer.add(this.previewActor);
     }
 
     updatePreview(tile) {
@@ -892,24 +1013,48 @@ export default class LevelEditorScene extends Phaser.Scene {
     }
 
     handleCameraMovement(delta) {
-        const speed = 500;
-        if (this.cursors.up.isDown || this.wasd.up.isDown) {
-            this.cameras.main.scrollY -= speed * (delta / 1000);
-        }
-        if (this.cursors.down.isDown || this.wasd.down.isDown) {
-            this.cameras.main.scrollY += speed * (delta / 1000);
-        }
-        if (this.cursors.left.isDown || this.wasd.left.isDown) {
-            this.cameras.main.scrollX -= speed * (delta / 1000);
-        }
-        if (this.cursors.right.isDown || this.wasd.right.isDown) {
-            this.cameras.main.scrollX += speed * (delta / 1000);
+        const speed = 500 * (1 / this.cameras.main.zoom); // Adjust speed based on zoom
+        
+        let moveX = 0;
+        let moveY = 0;
+
+        if (this.cursors.up.isDown || this.wasd.up.isDown) moveY -= 1;
+        if (this.cursors.down.isDown || this.wasd.down.isDown) moveY += 1;
+        if (this.cursors.left.isDown || this.wasd.left.isDown) moveX -= 1;
+        if (this.cursors.right.isDown || this.wasd.right.isDown) moveX += 1;
+
+        if (moveX !== 0 || moveY !== 0) {
+            // Normalize
+            const length = Math.sqrt(moveX * moveX + moveY * moveY);
+            this.cameras.main.scrollX += (moveX / length) * speed * (delta / 1000);
+            this.cameras.main.scrollY += (moveY / length) * speed * (delta / 1000);
         }
     }
 
     gridToIso(x, y, height = 0) {
         const centerX = (GRID_SIZE.width * TILE_SIZE.width) / 2;
-        // Use the imported utility
-        return isoToScreen(x, y, TILE_SIZE.width, TILE_SIZE.height, centerX, 0, height);
+        
+        let rx = x;
+        let ry = y;
+        const maxW = GRID_SIZE.width - 1;
+        const maxH = GRID_SIZE.height - 1;
+
+        // Rotate logical coordinates based on viewRotation
+        switch(this.viewRotation) {
+            case 1: // 90 deg clockwise
+                rx = y;
+                ry = maxW - x;
+                break;
+            case 2: // 180 deg
+                rx = maxW - x;
+                ry = maxH - y;
+                break;
+            case 3: // 270 deg
+                rx = maxH - y;
+                ry = x;
+                break;
+        }
+
+        return isoToScreen(rx, ry, TILE_SIZE.width, TILE_SIZE.height, centerX, 0, height);
     }
 }
