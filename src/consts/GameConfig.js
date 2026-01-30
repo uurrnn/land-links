@@ -36,7 +36,8 @@ export const UI_COLORS = {
 };
 
 export const TEXT_STYLES = {
-    title: { fontSize: '64px', fill: '#fff', fontStyle: 'bold', stroke: '#000', strokeThickness: 6 },
-    button: { fontSize: '24px', fill: '#fff', fontStyle: 'bold' },
-    label: { fontSize: '18px', fill: '#fff' }
+    fontFamily: '"Outfit", sans-serif',
+    title: { fontFamily: '"Outfit", sans-serif', fontSize: '64px', fill: '#fff', fontStyle: 'bold', stroke: '#000', strokeThickness: 6 },
+    button: { fontFamily: '"Outfit", sans-serif', fontSize: '24px', fill: '#fff', fontStyle: 'bold' },
+    label: { fontFamily: '"Outfit", sans-serif', fontSize: '18px', fill: '#fff' }
 };

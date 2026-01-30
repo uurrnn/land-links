@@ -2,21 +2,35 @@ import Phaser from 'phaser';
 import { UI_COLORS, TEXT_STYLES } from '../consts/GameConfig.js';
 
 export default class Button extends Phaser.GameObjects.Container {
-    constructor(scene, x, y, text, callback) {
+    constructor(scene, x, y, text, callback, config = {}) {
         super(scene, x, y);
         this.scene = scene;
         this.callback = callback;
 
         // Button dimensions
-        const width = 200;
-        const height = 50;
+        const width = config.width || 200;
+        const height = config.height || 50;
+        
+        // Handle color (hex string or number)
+        this.baseColor = UI_COLORS.button;
+        if (config.backgroundColor) {
+            if (typeof config.backgroundColor === 'string') {
+                this.baseColor = Phaser.Display.Color.HexStringToColor(config.backgroundColor.replace('#', '0x')).color;
+            } else {
+                this.baseColor = config.backgroundColor;
+            }
+        }
+        
+        this.baseAlpha = config.alpha !== undefined ? config.alpha : 0.8;
 
         // Background
-        this.background = scene.add.rectangle(0, 0, width, height, UI_COLORS.button)
-            .setStrokeStyle(2, UI_COLORS.buttonBorder);
+        this.background = scene.add.rectangle(0, 0, width, height, this.baseColor, this.baseAlpha);
         
         // Text
-        this.textObj = scene.add.text(0, 0, text, TEXT_STYLES.button)
+        const textStyle = { ...TEXT_STYLES.button };
+        if (config.fontSize) textStyle.fontSize = config.fontSize;
+
+        this.textObj = scene.add.text(0, 0, text, textStyle)
             .setOrigin(0.5);
 
         this.add([this.background, this.textObj]);
@@ -34,35 +48,24 @@ export default class Button extends Phaser.GameObjects.Container {
     }
 
     onHover() {
-        this.background.setFillStyle(UI_COLORS.buttonHover);
+        // Brighten slightly on hover
+        this.background.setFillStyle(this.baseColor, Math.min(1, this.baseAlpha + 0.1));
         this.textObj.setStyle({ fill: UI_COLORS.textHover });
-        this.scene.tweens.add({
-            targets: this,
-            scaleX: 1.05,
-            scaleY: 1.05,
-            duration: 100
-        });
     }
 
     onOut() {
-        this.background.setFillStyle(UI_COLORS.button);
+        this.background.setFillStyle(this.baseColor, this.baseAlpha);
         this.textObj.setStyle({ fill: UI_COLORS.text });
-        this.scene.tweens.add({
-            targets: this,
-            scaleX: 1,
-            scaleY: 1,
-            duration: 100
-        });
     }
 
     onDown() {
-        this.background.setFillStyle(UI_COLORS.secondary);
-        this.setScale(0.95);
+        this.background.setFillStyle(this.baseColor, Math.max(0.5, this.baseAlpha - 0.2));
+        this.y += 2;
     }
 
     onUp() {
-        this.background.setFillStyle(UI_COLORS.buttonHover);
-        this.setScale(1.05); // Return to hover scale
+        this.background.setFillStyle(this.baseColor, Math.min(1, this.baseAlpha + 0.1));
+        this.y -= 2;
         if (this.callback) {
             this.callback();
         }

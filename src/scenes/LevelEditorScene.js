@@ -12,17 +12,38 @@ import {
 export default class LevelEditorScene extends Phaser.Scene {
     constructor() {
         super({ key: 'LevelEditorScene' });
+    }
+
+    init(data) {
+        // Reset/Initialize State
         this.gridData = [];
+        this.tileSprites = [];
         this.selectedTileType = 'grass';
-        this.tileGroup = null;
-        this.tileSprites = []; // Optimization for tile access
-        
-        // State Management
-        this.editorState = 'IDLE'; // IDLE, PLACING_TEE, CONSTRUCTING
+        this.editorState = 'IDLE';
         this.course = { holes: [] };
         this.currentHole = null;
         this.popup = null;
-        this.viewRotation = 0; // 0: 0deg, 1: 90deg, 2: 180deg, 3: 270deg
+        this.viewRotation = 0;
+        this.currentSlot = data.slotId || 'auto'; // Remember which slot we are playing in
+        this.clubName = data.clubName || (data.initialData && data.initialData.clubName) || 'Unnamed Club';
+
+        // Golf Mode State
+        this.golfer = null;
+        this.ball = null;
+        this.aimGraphics = null;
+        this.isBallInFlight = false;
+        this.isBallRolling = false;
+        this.canSwing = false;
+        this.rollData = null;
+        
+        // UI References
+        this.notificationText = null;
+        this.uiContainer = null;
+        this.worldContainer = null;
+        this.editorUI = null;
+
+        this.showEditor = data.startInEditor !== undefined ? data.startInEditor : true;
+        this.pendingLoadData = data.initialData || null;
     }
 
     preload() {
@@ -40,9 +61,20 @@ export default class LevelEditorScene extends Phaser.Scene {
         bg.fillRoundedRect(0, 0, 150, 80, 5);
         bg.strokeRoundedRect(0, 0, 150, 80, 5);
 
-        const text = this.add.text(75, 20, `Hole ${hole.number}`, { fontSize: '18px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+        const text = this.add.text(75, 20, `Hole ${hole.number}`, { 
+            fontFamily: '"Outfit", sans-serif',
+            fontSize: '18px', 
+            fill: '#fff', 
+            fontStyle: 'bold' 
+        }).setOrigin(0.5);
         
-        const editBtn = this.add.text(75, 55, 'EDIT', { fontSize: '16px', fill: '#000', backgroundColor: '#fff', padding: { x: 10, y: 5 } })
+        const editBtn = this.add.text(75, 55, 'EDIT', { 
+            fontFamily: '"Outfit", sans-serif',
+            fontSize: '16px', 
+            fill: '#000', 
+            backgroundColor: '#fff', 
+            padding: { x: 10, y: 5 } 
+        })
             .setOrigin(0.5)
             .setInteractive({ useHandCursor: true });
         
@@ -81,11 +113,9 @@ export default class LevelEditorScene extends Phaser.Scene {
     }
 
     showNotification(message, color) {
-        // Re-implement simple notification since we removed it earlier?
-        // Actually, let's just use the checklist title color change or something.
-        // Or restore the simple text notification for temporary messages.
         if (!this.notificationText) {
-             this.notificationText = this.add.text(this.cameras.main.width / 2, 80, '', { 
+             this.notificationText = this.add.text(this.scale.width / 2, 80, '', { 
+                fontFamily: '"Outfit", sans-serif',
                 fontSize: '24px', 
                 fill: '#ffffff', 
                 backgroundColor: '#000000',
@@ -115,6 +145,10 @@ export default class LevelEditorScene extends Phaser.Scene {
         // UI Container (Static)
         this.uiContainer = this.add.container(0, 0);
         this.uiContainer.setScrollFactor(0); // Extra safety
+        
+        // Sub-container for editor tools
+        this.editorUI = this.add.container(0, 0);
+        this.uiContainer.add(this.editorUI);
 
         this.createBackground();
         this.createGrid();
@@ -124,18 +158,31 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.setupInput();
 
         // Background Camera (Bottom)
-        this.bgCamera = this.cameras.add(0, 0, this.cameras.main.width, this.cameras.main.height);
+        this.bgCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
         
         // UI Camera (Top)
-        this.uiCamera = this.cameras.add(0, 0, this.cameras.main.width, this.cameras.main.height);
+        this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
 
-        // Manually reorder cameras: [bgCamera, mainCamera, uiCamera]
+        // Sort Cameras: [BG, Main (World), UI]
         this.cameras.cameras = [this.bgCamera, this.cameras.main, this.uiCamera];
         
-        // Ignore Rules (Using containers is much more robust)
+        // Ignore Rules
         this.cameras.main.ignore([this.bg, this.uiContainer]);
         this.bgCamera.ignore([this.worldContainer, this.uiContainer, this.previewActor]);
         this.uiCamera.ignore([this.bg, this.worldContainer, this.previewActor]);
+
+        // Initial Visibility
+        this.editorUI.setVisible(this.showEditor);
+
+        // Load pending data if coming from Main Menu
+        if (this.pendingLoadData) {
+            this.time.delayedCall(100, () => {
+                if (this.scene.isActive()) {
+                    this.importCourse(this.pendingLoadData);
+                    this.pendingLoadData = null;
+                }
+            });
+        }
     }
 
     createBackground() {
@@ -144,6 +191,72 @@ export default class LevelEditorScene extends Phaser.Scene {
 
     update(time, delta) {
         this.handleCameraMovement(delta);
+        if (this.editorState === 'PLAYING') {
+            this.updatePlayMode();
+            this.updateBallPhysics(delta);
+        }
+    }
+
+    updateBallPhysics(delta) {
+        if (!this.isBallRolling || !this.ball || !this.rollData) return;
+
+        const dt = delta / 1000;
+        const d = this.rollData.v * delta; // Distance to move this frame
+        
+        this.rollData.x += this.rollData.dx * d;
+        this.rollData.y += this.rollData.dy * d;
+        
+        this.ball.x = this.rollData.x;
+        this.ball.y = this.rollData.y;
+
+        // Check for Hole Collision while rolling
+        const currentHole = this.course.holes[0]; // Assuming hole 0
+        const cupPos = this.gridToIso(currentHole.cup.x, currentHole.cup.y);
+        const distToCup = Phaser.Math.Distance.Between(this.ball.x, this.ball.y, cupPos.x, cupPos.y);
+
+        // If ball rolls over hole at reasonable speed, it goes in
+        if (distToCup < 12 && this.rollData.v < 0.8) {
+            this.isBallRolling = false;
+            this.isBallInFlight = false;
+            this.triggerWin();
+            return;
+        }
+
+        // Check Terrain
+        const gridPos = this.worldToGrid(this.ball.x, this.ball.y);
+        const tile = this.gridData[gridPos.y]?.[gridPos.x];
+        const terrain = tile ? tile.type : 'out';
+
+        if (terrain === 'water') {
+            this.isBallRolling = false;
+            this.handleImpact(this.ball.x, this.ball.y, 0, 0, 0); // Trigger Splash
+            return;
+        }
+
+        if (terrain === 'sand') {
+            this.isBallRolling = false;
+            this.showNotification("PLOP!", "#f1c40f");
+            this.isBallInFlight = false;
+            this.ballGrid = gridPos;
+            this.checkBallLanding();
+            return;
+        }
+
+        // Apply Friction
+        let friction = 0.92; // Balanced
+        if (terrain === 'green') friction = 0.96; 
+        if (terrain === 'rough') friction = 0.81; 
+        if (terrain === 'out') friction = 0.85;
+
+        // We apply friction per frame, but let's normalize it to time
+        this.rollData.v *= Math.pow(friction, delta / 16); 
+
+        if (this.rollData.v < 0.03) { // Slightly lower stop threshold
+            this.isBallRolling = false;
+            this.isBallInFlight = false;
+            this.ballGrid = gridPos;
+            this.checkBallLanding();
+        }
     }
 
     generateTileTextures() {
@@ -255,6 +368,27 @@ export default class LevelEditorScene extends Phaser.Scene {
             gfx.generateTexture(key, value.size.w, value.size.h);
         }
 
+        // Golfer
+        gfx.clear();
+        gfx.fillStyle(0x3498db); // Blue shirt
+        gfx.fillRect(8, 16, 16, 24); // Body
+        gfx.fillStyle(0xe0ac69); // Skin tone
+        gfx.fillCircle(16, 8, 8); // Head
+        gfx.fillStyle(0x333333); // Pants
+        gfx.fillRect(8, 40, 16, 8); // Feet/Pants
+        // Club (horizontal line initially)
+        gfx.lineStyle(2, 0x999999);
+        gfx.lineBetween(16, 30, 32, 30);
+        gfx.generateTexture('golfer', 40, 48);
+
+        // Ball
+        gfx.clear();
+        gfx.fillStyle(0xffffff);
+        gfx.fillCircle(4, 4, 3);
+        gfx.lineStyle(1, 0x888888);
+        gfx.strokeCircle(4, 4, 3);
+        gfx.generateTexture('ball', 8, 8);
+
         // Background
         gfx.clear();
         gfx.fillStyle(0x1a252f); // Dark grey-blue
@@ -326,6 +460,23 @@ export default class LevelEditorScene extends Phaser.Scene {
         const uiDepth = 10000;
         this.uiButtons = {}; // Store button references
 
+        // --- HUD ELEMENTS (Always Visible) ---
+        const toggleEditorBtn = this.add.text(20, this.cameras.main.height - 50, '🛠 EDIT COURSE', {
+            fontFamily: '"Outfit", sans-serif',
+            fontSize: '16px',
+            fill: '#fff',
+            backgroundColor: '#34495e',
+            padding: { x: 15, y: 10 },
+            fontStyle: 'bold'
+        })
+        .setInteractive({ useHandCursor: true })
+        .setDepth(uiDepth + 100);
+        
+        this.uiContainer.add(toggleEditorBtn);
+        toggleEditorBtn.on('pointerdown', () => this.toggleEditor());
+
+        // --- EDITOR UI (Toggable) ---
+        
         // Sidebar Background
         const uiPanel = this.add.graphics();
         uiPanel.fillStyle(0x222222, 0.95);
@@ -334,18 +485,19 @@ export default class LevelEditorScene extends Phaser.Scene {
         uiPanel.strokeLineShape(new Phaser.Geom.Line(250, 0, 250, this.cameras.main.height));
         uiPanel.setDepth(uiDepth);
         uiPanel.setInteractive(new Phaser.Geom.Rectangle(0, 0, 250, this.cameras.main.height), Phaser.Geom.Rectangle.Contains);
-        this.uiContainer.add(uiPanel);
+        this.editorUI.add(uiPanel);
 
         let yPos = 20;
         const xPos = 25;
         const btnWidth = 200;
 
         // --- ACTIONS ---
-        const actionsLabel = this.add.text(xPos, yPos, 'ACTIONS', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
-        this.uiContainer.add(actionsLabel);
+        const actionsLabel = this.add.text(xPos, yPos, 'ACTIONS', { fontFamily: '"Outfit", sans-serif', fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.editorUI.add(actionsLabel);
         yPos += 20;
 
         const newHoleBtn = this.add.text(xPos, yPos, '+ NEW HOLE', { 
+            fontFamily: '"Outfit", sans-serif',
             fontSize: '16px', 
             fill: '#fff', 
             backgroundColor: '#27ae60', 
@@ -356,7 +508,7 @@ export default class LevelEditorScene extends Phaser.Scene {
         })
         .setInteractive({ useHandCursor: true })
         .setDepth(uiDepth);
-        this.uiContainer.add(newHoleBtn);
+        this.editorUI.add(newHoleBtn);
         
         newHoleBtn.on('pointerdown', () => this.startNewHole());
         newHoleBtn.on('pointerover', () => newHoleBtn.setAlpha(0.8));
@@ -364,14 +516,35 @@ export default class LevelEditorScene extends Phaser.Scene {
         
         yPos += 50;
 
+        const playBtn = this.add.text(xPos, yPos, '▶ PLAY TEST', { 
+            fontFamily: '"Outfit", sans-serif',
+            fontSize: '16px', 
+            fill: '#fff', 
+            backgroundColor: '#2980b9', 
+            padding: { x: 10, y: 8 },
+            fixedWidth: btnWidth,
+            align: 'center',
+            fontStyle: 'bold'
+        })
+        .setInteractive({ useHandCursor: true })
+        .setDepth(uiDepth);
+        this.editorUI.add(playBtn);
+        
+        playBtn.on('pointerdown', () => this.enterPlayMode());
+        playBtn.on('pointerover', () => playBtn.setAlpha(0.8));
+        playBtn.on('pointerout', () => playBtn.setAlpha(1));
+
+        yPos += 60;
+
         // --- HOLE ELEMENTS ---
-        const holeLabel = this.add.text(xPos, yPos, 'HOLE ELEMENTS', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
-        this.uiContainer.add(holeLabel);
+        const holeLabel = this.add.text(xPos, yPos, 'HOLE ELEMENTS', { fontFamily: '"Outfit", sans-serif', fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.editorUI.add(holeLabel);
         yPos += 20;
 
         const holeElements = ['tee', 'green', 'cup'];
         holeElements.forEach(type => {
             const btn = this.add.text(xPos, yPos, type.toUpperCase(), { 
+                fontFamily: '"Outfit", sans-serif',
                 fontSize: '14px', 
                 fill: '#fff',
                 backgroundColor: '#333',
@@ -382,7 +555,7 @@ export default class LevelEditorScene extends Phaser.Scene {
             .setDepth(uiDepth);
             
             this.uiButtons[type] = btn;
-            this.uiContainer.add(btn);
+            this.editorUI.add(btn);
 
             btn.on('pointerdown', () => {
                 this.selectedTileType = type;
@@ -395,13 +568,14 @@ export default class LevelEditorScene extends Phaser.Scene {
         yPos += 20;
 
         // --- TERRAIN ---
-        const terrainLabel = this.add.text(xPos, yPos, 'TERRAIN', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
-        this.uiContainer.add(terrainLabel);
+        const terrainLabel = this.add.text(xPos, yPos, 'TERRAIN', { fontFamily: '"Outfit", sans-serif', fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.editorUI.add(terrainLabel);
         yPos += 20;
 
         const tileTypes = ['grass', 'fairway', 'sand', 'water', 'rough'];
         tileTypes.forEach(type => {
             const btn = this.add.text(xPos, yPos, type.toUpperCase(), { 
+                fontFamily: '"Outfit", sans-serif',
                 fontSize: '14px', 
                 fill: '#fff',
                 backgroundColor: '#333',
@@ -412,7 +586,7 @@ export default class LevelEditorScene extends Phaser.Scene {
             .setDepth(uiDepth);
             
             this.uiButtons[type] = btn;
-            this.uiContainer.add(btn);
+            this.editorUI.add(btn);
 
             btn.on('pointerdown', () => {
                 this.selectedTileType = type;
@@ -425,22 +599,24 @@ export default class LevelEditorScene extends Phaser.Scene {
         yPos += 20;
 
         // --- ELEVATION ---
-        const elevationLabel = this.add.text(xPos, yPos, 'ELEVATION', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
-        this.uiContainer.add(elevationLabel);
+        const elevationLabel = this.add.text(xPos, yPos, 'ELEVATION', { fontFamily: '"Outfit", sans-serif', fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.editorUI.add(elevationLabel);
         yPos += 20;
         
         const upBtn = this.add.text(xPos, yPos, 'RAISE (+)', { 
+            fontFamily: '"Outfit", sans-serif',
             fontSize: '14px', fill: '#fff', backgroundColor: '#333', padding: { x: 10, y: 5 }, fixedWidth: 95, align: 'center' 
         }).setInteractive({ useHandCursor: true }).setDepth(uiDepth);
         
         const downBtn = this.add.text(xPos + 105, yPos, 'LOWER (-)', { 
+            fontFamily: '"Outfit", sans-serif',
             fontSize: '14px', fill: '#fff', backgroundColor: '#333', padding: { x: 10, y: 5 }, fixedWidth: 95, align: 'center' 
         }).setInteractive({ useHandCursor: true }).setDepth(uiDepth);
         
         this.uiButtons['height_up'] = upBtn;
         this.uiButtons['height_down'] = downBtn;
-        this.uiContainer.add(upBtn);
-        this.uiContainer.add(downBtn);
+        this.editorUI.add(upBtn);
+        this.editorUI.add(downBtn);
 
         upBtn.on('pointerdown', () => {
             this.selectedTileType = 'height_up';
@@ -455,12 +631,13 @@ export default class LevelEditorScene extends Phaser.Scene {
         yPos += 40;
 
         // --- DECORATIONS ---
-        const decoLabel = this.add.text(xPos, yPos, 'DECORATIONS', { fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
-        this.uiContainer.add(decoLabel);
+        const decoLabel = this.add.text(xPos, yPos, 'DECORATIONS', { fontFamily: '"Outfit", sans-serif', fontSize: '12px', fill: '#888', fontStyle: 'bold' }).setDepth(uiDepth);
+        this.editorUI.add(decoLabel);
         yPos += 20;
 
         DECO_NAMES.filter(name => name !== 'cup').forEach(type => {
             const btn = this.add.text(xPos, yPos, type.toUpperCase(), { 
+                fontFamily: '"Outfit", sans-serif',
                 fontSize: '14px', 
                 fill: '#fff',
                 backgroundColor: '#333',
@@ -471,7 +648,7 @@ export default class LevelEditorScene extends Phaser.Scene {
             .setDepth(uiDepth);
 
             this.uiButtons[type] = btn;
-            this.uiContainer.add(btn);
+            this.editorUI.add(btn);
 
             btn.on('pointerdown', () => {
                 this.selectedTileType = type;
@@ -483,6 +660,396 @@ export default class LevelEditorScene extends Phaser.Scene {
 
         this.createChecklist();
         this.updateButtonStyles(); // Initial highlight
+    }
+
+    toggleEditor() {
+        this.showEditor = !this.showEditor;
+        this.editorUI.setVisible(this.showEditor);
+        this.showNotification(this.showEditor ? "EDITOR OPENED" : "EDITOR CLOSED", "#ffffff");
+    }
+
+    saveCourse() {
+        this.quickSave('auto');
+        // Serialize gridData (replace sprite refs with type names)
+        const serializedGrid = this.gridData.map(row => 
+            row.map(tile => ({
+                type: tile.type,
+                height: tile.height,
+                decoration: tile.decoration ? tile.decoration.texture.key : null,
+                holeId: tile.holeId
+            }))
+        );
+
+        const data = {
+            course: this.course,
+            gridData: serializedGrid,
+            viewRotation: this.viewRotation
+        };
+
+        const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `golf_course_${new Date().getTime()}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        this.showNotification("Course Exported!", "#00ff00");
+    }
+
+    loadCourse() {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json';
+        input.onchange = (e) => {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    this.importCourse(data);
+                } catch (err) {
+                    this.showNotification("Invalid JSON File!", "#ff0000");
+                }
+            };
+            reader.readAsText(file);
+        };
+        input.click();
+    }
+
+    importCourse(data) {
+        if (!data.gridData || !data.course) return;
+
+        this.clubName = data.clubName || 'Unnamed Club';
+
+        // Clear existing decorations
+        for (let y = 0; y < GRID_SIZE.height; y++) {
+            for (let x = 0; x < GRID_SIZE.width; x++) {
+                if (this.gridData[y][x].decoration) {
+                    this.gridData[y][x].decoration.destroy();
+                }
+            }
+        }
+
+        // Restore Data
+        this.course = data.course;
+        this.viewRotation = data.viewRotation || 0;
+        
+        // Reconstruct gridData and visuals
+        for (let y = 0; y < GRID_SIZE.height; y++) {
+            for (let x = 0; x < GRID_SIZE.width; x++) {
+                const tileData = data.gridData[y][x];
+                this.gridData[y][x] = {
+                    type: tileData.type,
+                    height: tileData.height,
+                    holeId: tileData.holeId,
+                    decoration: null
+                };
+
+                // Re-spawn Decoration if it exists
+                if (tileData.decoration) {
+                    const isoPos = this.gridToIso(x, y, tileData.height);
+                    const deco = this.add.sprite(isoPos.x, isoPos.y, tileData.decoration);
+                    deco.setOrigin(0.5, 1);
+                    this.worldContainer.add(deco);
+                    this.gridData[y][x].decoration = deco;
+                }
+            }
+        }
+
+        this.refreshAllTiles();
+        this.updateChecklist();
+        this.showNotification("Course Loaded Successfully!", "#00ff00");
+    }
+
+    enterPlayMode() {
+        if (this.course.holes.length === 0) {
+            this.showNotification("Need at least 1 hole to play!", "#ff0000");
+            return;
+        }
+
+        // Hide Editor UI for gameplay
+        this.editorUI.setVisible(false);
+
+        // Robust Cleanup for re-entry/restart
+        if (this.ball) this.tweens.killTweensOf(this.ball);
+        if (this.golfer) this.tweens.killTweensOf(this.golfer);
+        this.isBallInFlight = false;
+        this.isBallRolling = false;
+        this.rollData = null;
+
+        this.editorState = 'PLAYING';
+        this.canSwing = false;
+        this.showNotification("ENTERING PLAY MODE - ESC to Exit", "#3498db");
+
+        // Use the first hole for now
+        const firstHole = this.course.holes[0];
+        this.golferGrid = { x: firstHole.tee.x, y: firstHole.tee.y };
+        this.ballGrid = { x: firstHole.tee.x, y: firstHole.tee.y };
+
+        const teePos = this.gridToIso(this.golferGrid.x, this.golferGrid.y);
+
+        // Spawn Golfer
+        if (this.golfer) this.golfer.destroy();
+        this.golfer = this.add.sprite(teePos.x, teePos.y, 'golfer');
+        this.golfer.setOrigin(0.5, 1);
+        this.worldContainer.add(this.golfer);
+
+        // Spawn Ball
+        if (this.ball) this.ball.destroy();
+        this.ball = this.add.sprite(teePos.x + 10, teePos.y, 'ball');
+        this.ball.setOrigin(0.5, 0.5);
+        this.worldContainer.add(this.ball);
+
+        // Setup Aiming Graphics
+        if (this.aimGraphics) this.aimGraphics.destroy();
+        this.aimGraphics = this.add.graphics();
+        this.worldContainer.add(this.aimGraphics);
+
+        this.isBallInFlight = false;
+        this.cameras.main.centerOn(teePos.x, teePos.y);
+        this.cameras.main.setZoom(1.5);
+
+        // Prevent accidental swing from the button click
+        this.time.delayedCall(100, () => {
+            this.canSwing = true;
+        });
+    }
+
+    exitPlayMode() {
+        this.editorState = 'IDLE';
+        this.canSwing = false;
+        
+        // Restore Editor UI if it was open
+        this.editorUI.setVisible(this.showEditor);
+
+        if (this.golfer) this.golfer.destroy();
+        if (this.ball) this.ball.destroy();
+        if (this.aimGraphics) this.aimGraphics.destroy();
+        this.golfer = null;
+        this.ball = null;
+        this.aimGraphics = null;
+        this.showNotification("RETURNED TO EDITOR", "#ffffff");
+        this.cameras.main.setZoom(1);
+    }
+
+    updatePlayMode() {
+        if (!this.golfer || !this.ball || this.isBallInFlight) return;
+
+        const pointer = this.input.activePointer;
+        const worldPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+
+        // Update Golfer Rotation/Flip to face mouse
+        this.golfer.flipX = (worldPoint.x < this.golfer.x);
+
+        // Draw Trajectory Arc
+        this.aimGraphics.clear();
+        this.aimGraphics.lineStyle(2, 0xffffff, 0.5);
+
+        const startX = this.ball.x;
+        const startY = this.ball.y;
+        const endX = worldPoint.x;
+        const endY = worldPoint.y;
+
+        const dist = Phaser.Math.Distance.Between(startX, startY, endX, endY);
+        const maxHeight = Math.min(dist / 2, 100);
+
+        // Simple quadratic bezier for the arc
+        const midX = (startX + endX) / 2;
+        const midY = (startY + endY) / 2 - maxHeight;
+
+        this.aimGraphics.lineStyle(2, 0xffffff, 0.5);
+        const curve = new Phaser.Curves.QuadraticBezier(
+            new Phaser.Math.Vector2(startX, startY),
+            new Phaser.Math.Vector2(midX, midY),
+            new Phaser.Math.Vector2(endX, endY)
+        );
+        const points = curve.getPoints(20);
+        this.aimGraphics.strokePoints(points);
+
+        // Draw Landing Target
+        this.aimGraphics.fillStyle(0xffffff, 0.3);
+        this.aimGraphics.fillCircle(endX, endY, 10);
+    }
+
+    swingAndHit() {
+        if (this.isBallInFlight || !this.canSwing) return;
+        this.isBallInFlight = true;
+
+        const pointer = this.input.activePointer;
+        const targetPoint = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+
+        // "Rough" Swing Animation (Simple rotation)
+        this.tweens.add({
+            targets: this.golfer,
+            angle: this.golfer.flipX ? 45 : -45,
+            duration: 150,
+            yoyo: true,
+            onComplete: () => {
+                this.golfer.angle = 0;
+                this.launchBall(targetPoint.x, targetPoint.y);
+            }
+        });
+    }
+
+    launchBall(endX, endY) {
+        const startX = this.ball.x;
+        const startY = this.ball.y;
+        
+        const dist = Phaser.Math.Distance.Between(startX, startY, endX, endY);
+        const maxHeight = Math.min(dist / 2, 150);
+        const midX = (startX + endX) / 2;
+        const midY = (startY + endY) / 2 - maxHeight;
+
+        this.aimGraphics.clear();
+
+        // 1. FLIGHT PHASE
+        const flightDuration = 600 + (dist / 1.5);
+        
+        this.tweens.add({
+            targets: { t: 0 },
+            t: 1,
+            duration: flightDuration,
+            ease: 'Linear', // Linear horizontal progress = Gravity feel
+            onUpdate: (tween) => {
+                if (!this.ball) return;
+                const curT = tween.getValue();
+                
+                // Path on the ground plane (Linear)
+                this.ball.x = (1 - curT) * (1 - curT) * startX + 2 * (1 - curT) * curT * midX + curT * curT * endX;
+                this.ball.y = (1 - curT) * (1 - curT) * startY + 2 * (1 - curT) * curT * midY + curT * curT * endY;
+                
+                // Visual Height (Parabolic scale/offset)
+                const height = Math.sin(curT * Math.PI);
+                this.ball.setScale(1 + height * 0.6);
+                this.ball.y -= height * maxHeight * 0.5; // Visual arc offset
+            },
+            onComplete: () => {
+                if (!this.ball) return;
+                this.handleImpact(endX, endY, (endX - startX) / dist, (endY - startY) / dist, dist);
+            }
+        });
+    }
+
+    handleImpact(x, y, dirX, dirY, power) {
+        this.ball.setScale(1);
+        const gridPos = this.worldToGrid(x, y);
+        const tile = this.gridData[gridPos.y]?.[gridPos.x];
+        const terrain = tile ? tile.type : 'out';
+
+        // Dampen power for extremely long shots to prevent physics explosion
+        let effectivePower = power;
+        if (power > 400) {
+            effectivePower = 400 + (power - 400) * 0.5;
+        }
+
+        if (terrain === 'water') {
+            this.showNotification("SPLASH!", "#3498db");
+            this.tweens.add({
+                targets: this.ball,
+                alpha: 0,
+                scale: 0.5,
+                duration: 500,
+                onComplete: () => this.exitPlayMode()
+            });
+            return;
+        }
+
+        if (terrain === 'sand') {
+            this.showNotification("PLOP!", "#f1c40f");
+            this.ballGrid = gridPos;
+            this.checkBallLanding();
+            this.isBallInFlight = false;
+            return;
+        }
+
+        // Determine bounce and roll based on terrain
+        let bounceMult = 0.25; // Reduced from 0.4
+        let rollMult = 0.25; // Balanced
+
+        if (terrain === 'green') { bounceMult = 0.25; rollMult = 0.275; } // Reduced bounce
+        if (terrain === 'rough') { bounceMult = 0.10; rollMult = 0.075; } // Balanced
+
+        const bounceDist = effectivePower * bounceMult * 1.5; // Increased length
+        if (bounceDist > 20) {
+            this.bounceBall(x, y, dirX, dirY, bounceDist, rollMult);
+        } else {
+            // Fix: Use bounce-consistent power formula to avoid jump at threshold
+            this.rollBall(x, y, dirX, dirY, effectivePower * bounceMult * rollMult * 0.5);
+        }
+    }
+
+    bounceBall(startX, startY, dirX, dirY, dist, rollMult) {
+        const endX = startX + dirX * dist;
+        const endY = startY + dirY * dist;
+        const midX = (startX + endX) / 2;
+        const midY = (startY + endY) / 2 - (dist / 4); // Shallower arc
+
+        // Scale duration with distance so long bounces don't look too fast
+        const duration = 300 + (dist);
+
+        this.tweens.add({
+            targets: { t: 0 },
+            t: 1,
+            duration: duration,
+            ease: 'Linear',
+            onUpdate: (tween) => {
+                if (!this.ball) return;
+                const curT = tween.getValue();
+                this.ball.x = (1 - curT) * (1 - curT) * startX + 2 * (1 - curT) * curT * midX + curT * curT * endX;
+                this.ball.y = (1 - curT) * (1 - curT) * startY + 2 * (1 - curT) * curT * midY + curT * curT * endY;
+                
+                const height = Math.sin(curT * Math.PI);
+                this.ball.y -= height * (dist / 10); // Shorter height
+            },
+            onComplete: () => {
+                if (!this.ball) return;
+                this.rollBall(this.ball.x, this.ball.y, dirX, dirY, dist * rollMult * 0.5);
+            }
+        });
+    }
+
+    rollBall(startX, startY, dirX, dirY, power) {
+        this.isBallRolling = true;
+        this.rollData = {
+            x: startX,
+            y: startY,
+            dx: dirX,
+            dy: dirY,
+            v: power / 45 // Lowered velocity for better control
+        };
+    }
+
+    triggerWin() {
+        this.showNotification("IN THE HOLE!", "#ffff00");
+        this.ball.setVisible(false);
+        this.canSwing = false; // Disable swinging immediately
+        this.time.delayedCall(2000, () => {
+            this.exitPlayMode();
+        });
+    }
+
+    checkBallLanding() {
+        // Find if ball is near cup
+        const currentHole = this.course.holes[0]; // Still assuming hole 0
+        const cupPos = this.gridToIso(currentHole.cup.x, currentHole.cup.y);
+        const dist = Phaser.Math.Distance.Between(this.ball.x, this.ball.y, cupPos.x, cupPos.y);
+
+        if (dist < 15) {
+            this.triggerWin();
+        } else {
+            // Move golfer to ball for next shot
+            const targetX = this.ball.x - 10;
+            const targetY = this.ball.y;
+            this.tweens.add({
+                targets: this.golfer,
+                x: targetX,
+                y: targetY,
+                duration: 500,
+                onComplete: () => {
+                    this.golferGrid = this.worldToGrid(targetX, targetY);
+                }
+            });
+        }
     }
 
     updateButtonStyles() {
@@ -517,6 +1084,11 @@ export default class LevelEditorScene extends Phaser.Scene {
         let startY = 0;
 
         this.input.on('pointerdown', (pointer) => {
+            if (this.editorState === 'PLAYING' && pointer.button === 0) {
+                this.swingAndHit();
+                return;
+            }
+
             if (pointer.button === 1) { // Middle mouse button
                 isDragging = true;
                 startX = pointer.x;
@@ -543,6 +1115,9 @@ export default class LevelEditorScene extends Phaser.Scene {
 
 
         this.input.on('gameobjectdown', (pointer, gameObject) => {
+            if (this.editorState === 'PLAYING') return; // Block editor input in play mode
+            if (!this.showEditor) return; // Block painting if editor is hidden
+
             if (pointer.button === 0) { // Left mouse button
                 // Check if we are clicking an existing Tee in IDLE mode
                 if (this.editorState === 'IDLE') {
@@ -573,6 +1148,9 @@ export default class LevelEditorScene extends Phaser.Scene {
         });
 
         this.input.on('gameobjectover', (pointer, gameObject) => {
+            if (this.editorState === 'PLAYING') return;
+            if (!this.showEditor) return;
+
             this.updatePreview(gameObject);
             if (pointer.buttons === 1) { // Left mouse button is down
                 this.paintTile(gameObject);
@@ -580,6 +1158,7 @@ export default class LevelEditorScene extends Phaser.Scene {
         });
 
         this.input.on('gameobjectout', (pointer, gameObject) => {
+            if (this.editorState === 'PLAYING') return;
             if (this.previewActor) this.previewActor.setVisible(false);
         });
 
@@ -600,6 +1179,10 @@ export default class LevelEditorScene extends Phaser.Scene {
 
         // Pause functionality
         this.input.keyboard.on('keydown-ESC', () => {
+            if (this.editorState === 'PLAYING') {
+                this.exitPlayMode();
+                return;
+            }
             this.scene.pause();
             this.scene.launch('PauseScene');
         });
@@ -673,6 +1256,16 @@ export default class LevelEditorScene extends Phaser.Scene {
                 this.refreshTile(x, y);
             }
         }
+
+        // Update Golfer/Ball positions on rotation
+        if (this.golfer) {
+            const pos = this.gridToIso(this.golferGrid.x, this.golferGrid.y);
+            this.golfer.setPosition(pos.x, pos.y);
+        }
+        if (this.ball) {
+            const pos = this.gridToIso(this.ballGrid.x, this.ballGrid.y);
+            this.ball.setPosition(pos.x, pos.y);
+        }
     }
 
     finalizeHole() {
@@ -698,6 +1291,46 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.editorState = 'IDLE';
         this.currentHole = null;
         this.updateChecklist();
+        this.quickSave(); // Auto-save on finalize to the current slot
+    }
+
+    quickSave(slotId = null) {
+        const id = slotId || this.currentSlot;
+        const serializedGrid = this.gridData.map(row => 
+            row.map(tile => ({
+                type: tile.type,
+                height: tile.height,
+                decoration: tile.decoration ? tile.decoration.texture.key : null,
+                holeId: tile.holeId
+            }))
+        );
+
+        const data = {
+            clubName: this.clubName,
+            course: this.course,
+            gridData: serializedGrid,
+            viewRotation: this.viewRotation,
+            timestamp: new Date().getTime()
+        };
+
+        localStorage.setItem(`iso_golf_save_${id}`, JSON.stringify(data));
+        if (id !== 'auto') {
+            this.showNotification(`Saved to Slot ${id}`, "#00ff00");
+        }
+    }
+
+    loadFromSlot(slotId) {
+        const savedData = localStorage.getItem(`iso_golf_save_${slotId}`);
+        if (savedData) {
+            try {
+                const data = JSON.parse(savedData);
+                this.importCourse(data);
+                return true;
+            } catch (e) {
+                this.showNotification("Failed to load slot!", "#ff0000");
+            }
+        }
+        return false;
     }
 
     findTileByType(type) {
@@ -925,18 +1558,27 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.checklistPanel.strokeRoundedRect(x, y, width, height, 10);
         this.checklistPanel.setDepth(uiDepth);
         this.checklistPanel.setInteractive(new Phaser.Geom.Rectangle(x, y, width, height), Phaser.Geom.Rectangle.Contains);
-        this.uiContainer.add(this.checklistPanel);
+        this.editorUI.add(this.checklistPanel);
 
-        this.checklistTitle = this.add.text(x + 105, y + 20, '', { fontSize: '16px', fill: '#fff', fontStyle: 'bold' })
+        this.checklistTitle = this.add.text(x + 105, y + 20, '', { 
+            fontFamily: '"Outfit", sans-serif',
+            fontSize: '16px', 
+            fill: '#fff', 
+            fontStyle: 'bold' 
+        })
             .setOrigin(0.5).setDepth(uiDepth);
-        this.uiContainer.add(this.checklistTitle);
+        this.editorUI.add(this.checklistTitle);
         
         this.checkItems = [];
         const items = ['Place Tee', 'Place Cup', 'Build Hole', 'Press H to Finish'];
         items.forEach((item, index) => {
-            const text = this.add.text(x + 20, y + 50 + (index * 25), `[ ] ${item}`, { fontSize: '14px', fill: '#888' }).setDepth(uiDepth);
+            const text = this.add.text(x + 20, y + 50 + (index * 25), `[ ] ${item}`, { 
+                fontFamily: '"Outfit", sans-serif',
+                fontSize: '14px', 
+                fill: '#888' 
+            }).setDepth(uiDepth);
             this.checkItems.push({ key: item, obj: text });
-            this.uiContainer.add(text);
+            this.editorUI.add(text);
         });
 
         this.updateChecklist();
