@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 import Button from '../ui/Button.js';
+import { isoToScreen } from '../utils/IsoUtils.js';
+import { GRID_SIZE, TILE_SIZE, TILE_TYPES } from '../consts/GameConfig.js';
 
 const CLUB_ADJECTIVES = ["Royal", "Hidden", "Sunny", "Green", "Golden", "Old", "Grand", "Rolling", "Whispering", "Iron", "Rusty", "Sandy", "Blue", "Emerald", "Misty", "Shady", "Twin"];
 const CLUB_NOUNS = ["Links", "Valley", "Hills", "Meadows", "Woods", "Dunes", "Pines", "Creek", "Springs", "Gardens", "Fairways", "Heights", "Course", "Club", "Resort", "Ridge", "Point"];
@@ -25,10 +27,8 @@ export default class MainMenuScene extends Phaser.Scene {
         this.add.text(50, 50, 'Land & Links', { 
             fontFamily: '"Outfit", sans-serif',
             fontSize: '64px', 
-            fill: '#fff', 
+            fill: '#f5efef', 
             fontStyle: 'bold',
-            stroke: '#000',
-            strokeThickness: 6
         }).setOrigin(0, 0.5);
 
         // 3. Right Sidebar Menu
@@ -126,7 +126,7 @@ export default class MainMenuScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setInteractive({ useHandCursor: true });
         
-        diceBtn.on('pointerdown', () => {
+        diceBtn.on('pointerup', () => {
             currentName = this.generateRandomClubName();
             nameText.setText(currentName);
         });
@@ -140,7 +140,7 @@ export default class MainMenuScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setInteractive({ useHandCursor: true });
         
-        confirmBtn.on('pointerdown', () => {
+        confirmBtn.on('pointerup', () => {
             this.startNewGame(currentName);
             popup.destroy();
         });
@@ -154,7 +154,7 @@ export default class MainMenuScene extends Phaser.Scene {
         .setOrigin(0.5)
         .setInteractive({ useHandCursor: true });
         
-        closeBtn.on('pointerdown', () => {
+        closeBtn.on('pointerup', () => {
             popup.destroy();
         });
         popup.add(closeBtn);
@@ -218,48 +218,136 @@ export default class MainMenuScene extends Phaser.Scene {
         }
     }
 
+    findMostRecentSave() {
+        let recent = null;
+        let maxTime = 0;
+
+        [1, 2, 3].forEach(slot => {
+            const raw = localStorage.getItem(`iso_golf_save_${slot}`);
+            if (raw) {
+                try {
+                    const data = JSON.parse(raw);
+                    if (data.timestamp > maxTime) {
+                        maxTime = data.timestamp;
+                        recent = data;
+                    }
+                } catch(e) {}
+            }
+        });
+        return recent;
+    }
+
     generateMenuBackground(w, h) {
-        // Simple procedural generation for visual flair
         const gfx = this.add.graphics();
         
-        // Draw Water Base
+        // Draw Water Base (Sky/Background)
         gfx.fillStyle(0x3498db);
         gfx.fillRect(0, 0, w, h);
 
-        // Draw some isometric islands
-        // Re-using simplified iso logic for static drawing
-        const iso = (x, y) => {
-            return {
-                x: (x - y) * 32 + w/2,
-                y: (x + y) * 16 + h/4
+        const data = this.findMostRecentSave();
+
+        if (data && data.gridData) {
+            // Render Saved Course
+            const centerX = w / 2; // Screen center
+            // Offset logic: The map is 72x72. 
+            // 0,0 is top tip. 72,72 is bottom tip.
+            // We want to center roughly on the middle of the grid (36, 36).
+            // But isoToScreen expects a 'centerX' offset for the world origin.
+            
+            // Let's iterate and draw
+            // We can animate rotation? Maybe later. For now static.
+            
+            // Adjust start Y to show more of the map
+            const startY = h / 4; 
+
+            for (let y = 0; y < data.gridData.length; y++) {
+                for (let x = 0; x < data.gridData[y].length; x++) {
+                    const tile = data.gridData[y][x];
+                    
+                    // Simple Culling
+                    if (!tile || tile.type === 'water') continue; // Don't draw basic water to save perfs, we have blue BG
+
+                    const isoPos = isoToScreen(x, y, TILE_SIZE.width, TILE_SIZE.height, centerX, startY, tile.height);
+                    
+                    // Cull if offscreen
+                    if (isoPos.x < -100 || isoPos.x > w + 100 || isoPos.y < -100 || isoPos.y > h + 100) continue;
+
+                    // Draw Tile
+                    const color = TILE_TYPES[tile.type] || 0xffffff;
+                    
+                    // Top Face
+                    gfx.fillStyle(color);
+                    gfx.beginPath();
+                    gfx.moveTo(isoPos.x, isoPos.y - TILE_SIZE.height/2); // Top
+                    gfx.lineTo(isoPos.x + TILE_SIZE.width/2, isoPos.y); // Right
+                    gfx.lineTo(isoPos.x, isoPos.y + TILE_SIZE.height/2); // Bottom
+                    gfx.lineTo(isoPos.x - TILE_SIZE.width/2, isoPos.y); // Left
+                    gfx.closePath();
+                    gfx.fillPath();
+
+                    // Optional: Side shading for height
+                    if (tile.height > 0) {
+                        gfx.fillStyle(0x000000, 0.2);
+                        gfx.beginPath();
+                        gfx.moveTo(isoPos.x - TILE_SIZE.width/2, isoPos.y);
+                        gfx.lineTo(isoPos.x, isoPos.y + TILE_SIZE.height/2);
+                        gfx.lineTo(isoPos.x, isoPos.y + TILE_SIZE.height/2 + tile.height); // Height extrusion approximation (visual only)
+                        // Actually, 'isoPos' already includes height offset (-height).
+                        // Drawing proper sides requires knowing the base y.
+                        // Simplified: just draw the top face for the BG.
+                    }
+                    
+                    if (tile.decoration) {
+                        // Simple shapes for decorations
+                        if (tile.decoration.includes('tree')) {
+                            gfx.fillStyle(0x2d5a27); // Dark Green
+                            gfx.fillTriangle(
+                                isoPos.x, isoPos.y - 40,
+                                isoPos.x - 10, isoPos.y,
+                                isoPos.x + 10, isoPos.y
+                            );
+                        } else if (tile.decoration.includes('cup')) {
+                            gfx.fillStyle(0xff0000); // Flag
+                            gfx.fillRect(isoPos.x - 1, isoPos.y - 20, 2, 20);
+                        }
+                    }
+                }
+            }
+            
+            // Add a subtle rotation or pan?
+            // For now, static is fine as requested.
+
+        } else {
+            // Fallback: Procedural
+            const iso = (x, y) => {
+                return {
+                    x: (x - y) * 32 + w/2,
+                    y: (x + y) * 16 + h/4
+                };
             };
-        };
 
-        // Draw a big green island
-        for (let y = 0; y < 20; y++) {
-            for (let x = 0; x < 20; x++) {
-                const pos = iso(x, y);
-                // Random terrain
-                const isSand = Math.random() > 0.8;
-                const isTree = Math.random() > 0.9;
-                
-                const color = isSand ? 0xf1c40f : 0x5ba337;
-                
-                // Draw Diamond
-                gfx.fillStyle(color);
-                gfx.beginPath();
-                gfx.moveTo(pos.x, pos.y);
-                gfx.lineTo(pos.x + 32, pos.y + 16);
-                gfx.lineTo(pos.x, pos.y + 32);
-                gfx.lineTo(pos.x - 32, pos.y + 16);
-                gfx.closePath();
-                gfx.fillPath();
-                gfx.lineStyle(1, 0x000000, 0.1);
-                gfx.strokePath();
+            for (let y = 0; y < 20; y++) {
+                for (let x = 0; x < 20; x++) {
+                    const pos = iso(x, y);
+                    const isSand = Math.random() > 0.8;
+                    const isTree = Math.random() > 0.9;
+                    const color = isSand ? 0xf1c40f : 0x5ba337;
+                    
+                    gfx.fillStyle(color);
+                    gfx.beginPath();
+                    gfx.moveTo(pos.x, pos.y);
+                    gfx.lineTo(pos.x + 32, pos.y + 16);
+                    gfx.lineTo(pos.x, pos.y + 32);
+                    gfx.lineTo(pos.x - 32, pos.y + 16);
+                    gfx.closePath();
+                    gfx.fillPath();
+                    gfx.lineStyle(1, 0x000000, 0.1);
+                    gfx.strokePath();
 
-                if (isTree && !isSand) {
-                    gfx.fillStyle(0x3d7030);
-                    gfx.fillRect(pos.x - 5, pos.y - 20, 10, 30); // Simple tree
+                    if (isTree && !isSand) {
+                        gfx.fillStyle(0x3d7030);
+                        gfx.fillRect(pos.x - 5, pos.y - 20, 10, 30);
+                    }
                 }
             }
         }
@@ -303,14 +391,16 @@ export default class MainMenuScene extends Phaser.Scene {
                     // But Button adds itself to scene.add.existing(this).
                     // We can just create them and set depth.
                     
-                    new Button(this, width/2, btnY, `Slot ${slot}`, () => {
+                    const btn = new Button(this, width/2, btnY, `Slot ${slot}`, () => {
                         localStorage.setItem(`iso_golf_save_${slot}`, JSON.stringify(importData));
                         this.scene.start('LevelEditorScene', { 
                             startInEditor: isNewGame,
                             initialData: importData,
                             slotId: slot.toString()
                         });
-                    }, { width: 300, backgroundColor: '#c0392b' }).setDepth(101);
+                    }, { width: 300, backgroundColor: '#c0392b', fontSize: '18px', alpha: 0.9 });
+                    
+                    popup.add(btn);
                 });
         
                 // Cancel Button

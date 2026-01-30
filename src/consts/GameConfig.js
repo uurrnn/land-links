@@ -1,4 +1,4 @@
-export const GRID_SIZE = { width: 50, height: 50 };
+export const GRID_SIZE = { width: 72, height: 72 };
 export const TILE_SIZE = { width: 64, height: 32 };
 
 export const TILE_TYPES = {
