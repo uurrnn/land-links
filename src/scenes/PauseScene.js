@@ -1,6 +1,5 @@
 import Phaser from 'phaser';
 import Button from '../ui/Button.js';
-import { UI_COLORS, TEXT_STYLES } from '../consts/GameConfig.js';
 
 export default class PauseScene extends Phaser.Scene {
     constructor() {

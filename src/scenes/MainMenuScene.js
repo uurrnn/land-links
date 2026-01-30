@@ -1,6 +1,5 @@
 import Phaser from 'phaser';
 import Button from '../ui/Button.js';
-import { UI_COLORS, TEXT_STYLES } from '../consts/GameConfig.js';
 
 const CLUB_ADJECTIVES = ["Royal", "Hidden", "Sunny", "Green", "Golden", "Old", "Grand", "Rolling", "Whispering", "Iron", "Rusty", "Sandy", "Blue", "Emerald", "Misty", "Shady", "Twin"];
 const CLUB_NOUNS = ["Links", "Valley", "Hills", "Meadows", "Woods", "Dunes", "Pines", "Creek", "Springs", "Gardens", "Fairways", "Heights", "Course", "Club", "Resort", "Ridge", "Point"];

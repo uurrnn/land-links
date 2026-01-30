@@ -99,15 +99,12 @@ export default class LevelEditorScene extends Phaser.Scene {
         
         // Set as current
         this.currentHole = hole;
-        this.editorState = 'CONSTRUCTING'; // Jump straight to construction, tee exists
+        this.editorState = 'CONSTRUCTING'; 
         
         // Visual updates
-        this.showNotification(`Editing Hole ${hole.number}`, '#ffff00'); // Re-using notification logic if it exists, or just rely on checklist
+        this.showNotification(`Editing Hole ${hole.number}`, '#ffff00');
         this.updateChecklist();
         
-        // Select Tee tool by default to imply they can move it? 
-        // Or select Fairway? Let's select Fairway as that's the "next step" usually.
-        // But the prompt says "replace the tee box", so maybe Tee tool is okay.
         this.selectedTileType = 'tee'; 
         this.updateButtonStyles();
     }
