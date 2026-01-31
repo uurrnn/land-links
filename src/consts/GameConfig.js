@@ -41,3 +41,14 @@ export const TEXT_STYLES = {
     button: { fontFamily: '"Outfit", sans-serif', fontSize: '24px', fill: '#fff', fontStyle: 'bold' },
     label: { fontFamily: '"Outfit", sans-serif', fontSize: '18px', fill: '#fff' }
 };
+
+// Buildings definitions
+export const BUILDING_TYPES = {
+    clubhouse: {
+        size: { tilesW: 3, tilesH: 3 },
+        color: 0x8b572a,
+        roofColor: 0x6b3f1f
+    }
+};
+
+export const BUILDING_NAMES = Object.keys(BUILDING_TYPES);

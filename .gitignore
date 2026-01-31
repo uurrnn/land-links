@@ -118,3 +118,6 @@ netlify/functions/logs/
 
 # Vitest coverage output
 coverage/
+
+# phpstorm
+.idea/

@@ -5,8 +5,9 @@ import {
     TILE_SIZE, 
     TILE_TYPES, 
     DECO_TYPES, 
-    TILE_NAMES, 
-    DECO_NAMES 
+    DECO_NAMES,
+    BUILDING_TYPES,
+    BUILDING_NAMES
 } from '../consts/GameConfig.js';
 
 export default class LevelEditorScene extends Phaser.Scene {
@@ -26,6 +27,9 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.viewRotation = 0;
         this.currentSlot = data.slotId || 'auto'; // Remember which slot we are playing in
         this.clubName = data.clubName || (data.initialData && data.initialData.clubName) || 'Unnamed Club';
+
+        // Build Mode flag (simple toggle for the 'Build' button)
+        this.isBuildMode = false;
 
         // Golf Mode State
         this.golfer = null;
@@ -61,23 +65,23 @@ export default class LevelEditorScene extends Phaser.Scene {
         bg.fillRoundedRect(0, 0, 150, 80, 5);
         bg.strokeRoundedRect(0, 0, 150, 80, 5);
 
-        const text = this.add.text(75, 20, `Hole ${hole.number}`, { 
+        const text = this.add.text(75, 20, `Hole ${hole.number}`, {
             fontFamily: '"Outfit", sans-serif',
-            fontSize: '18px', 
-            fill: '#fff', 
-            fontStyle: 'bold' 
+            fontSize: '18px',
+            fill: '#fff',
+            fontStyle: 'bold'
         }).setOrigin(0.5);
-        
-        const editBtn = this.add.text(75, 55, 'EDIT', { 
+
+        const editBtn = this.add.text(75, 55, 'EDIT', {
             fontFamily: '"Outfit", sans-serif',
-            fontSize: '16px', 
-            fill: '#000', 
-            backgroundColor: '#fff', 
-            padding: { x: 10, y: 5 } 
+            fontSize: '16px',
+            fill: '#000',
+            backgroundColor: '#fff',
+            padding: { x: 10, y: 5 }
         })
             .setOrigin(0.5)
             .setInteractive({ useHandCursor: true });
-        
+
         editBtn.on('pointerdown', () => {
             onEdit();
             this.popup.destroy();
@@ -85,10 +89,10 @@ export default class LevelEditorScene extends Phaser.Scene {
         });
 
         this.popup.add([bg, text, editBtn]);
-        
+
         // Prevent click propagation to game
         this.popup.setInteractive(new Phaser.Geom.Rectangle(0, 0, 150, 80), Phaser.Geom.Rectangle.Contains);
-        
+
         this.uiCamera.ignore(this.popup);
         if (this.bgCamera) this.bgCamera.ignore(this.popup);
     }
@@ -96,38 +100,38 @@ export default class LevelEditorScene extends Phaser.Scene {
     editHole(hole) {
         // Remove from finalized list
         this.course.holes = this.course.holes.filter(h => h !== hole);
-        
+
         // Set as current
         this.currentHole = hole;
         this.editorState = 'CONSTRUCTING'; // Jump straight to construction, tee exists
-        
+
         // Visual updates
         this.showNotification(`Editing Hole ${hole.number}`, '#ffff00'); // Re-using notification logic if it exists, or just rely on checklist
         this.updateChecklist();
-        
-        // Select Tee tool by default to imply they can move it? 
+
+        // Select Tee tool by default to imply they can move it?
         // Or select Fairway? Let's select Fairway as that's the "next step" usually.
         // But the prompt says "replace the tee box", so maybe Tee tool is okay.
-        this.selectedTileType = 'tee'; 
+        this.selectedTileType = 'tee';
         this.updateButtonStyles();
     }
 
     showNotification(message, color) {
         if (!this.notificationText) {
-             this.notificationText = this.add.text(this.scale.width / 2, 80, '', { 
+             this.notificationText = this.add.text(this.scale.width / 2, 80, '', {
                 fontFamily: '"Outfit", sans-serif',
-                fontSize: '24px', 
-                fill: '#ffffff', 
+                fontSize: '24px',
+                fill: '#ffffff',
                 backgroundColor: '#000000',
                 padding: { x: 10, y: 5 }
             }).setOrigin(0.5).setAlpha(0).setDepth(20000);
             this.uiContainer.add(this.notificationText);
         }
-        
+
         this.notificationText.setText(message);
         this.notificationText.setStyle({ fill: color });
         this.notificationText.setAlpha(1);
-        
+
         this.tweens.add({
             targets: this.notificationText,
             alpha: 0,
@@ -136,16 +140,174 @@ export default class LevelEditorScene extends Phaser.Scene {
         });
     }
 
+    // Confirmation modal used for actions that require user approval
+    createConfirmationModal(message, onConfirm, onCancel) {
+        // If an existing confirmation modal exists, remove it first
+        if (this.confirmationModal) {
+            this.confirmationModal.destroy();
+            this.confirmationModal = null;
+        }
+
+        const width = 340;
+        const height = 120;
+        const x = (this.cameras.main.width / 2) - (width / 2);
+        const y = (this.cameras.main.height / 2) - (height / 2);
+
+        // Create a full-screen blocker to prevent clicks outside the modal
+        const blocker = this.add.graphics().fillStyle(0x000000, 0.55).fillRect(0, 0, this.cameras.main.width, this.cameras.main.height).setDepth(29999);
+
+        const container = this.add.container(x, y).setDepth(30000);
+        const bg = this.add.graphics();
+        bg.fillStyle(0x000000, 0.95);
+        bg.fillRoundedRect(0, 0, width, height, 8);
+        bg.lineStyle(2, 0xffffff, 0.15);
+        bg.strokeRoundedRect(0, 0, width, height, 8);
+
+        const text = this.add.text(width / 2, 26, message, {
+            fontFamily: '"Outfit", sans-serif',
+            fontSize: '16px',
+            fill: '#fff',
+            align: 'center',
+            wordWrap: { width: width - 40 }
+        }).setOrigin(0.5, 0);
+
+        const yesBtn = this.add.text(width / 2 - 70, height - 36, 'YES', {
+            fontFamily: '"Outfit", sans-serif',
+            fontSize: '14px',
+            fill: '#fff',
+            backgroundColor: '#27ae60',
+            padding: { x: 10, y: 6 }
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+
+        const noBtn = this.add.text(width / 2 + 70, height - 36, 'NO', {
+            fontFamily: '"Outfit", sans-serif',
+            fontSize: '14px',
+            fill: '#fff',
+            backgroundColor: '#c0392b',
+            padding: { x: 10, y: 6 }
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+
+        const cleanup = () => {
+            // Remove keyboard handlers
+            if (this._confirmKeyEnter) {
+                this.input.keyboard.removeKey(this._confirmKeyEnter);
+                this._confirmKeyEnter = null;
+            }
+            if (this._confirmKeyEsc) {
+                this.input.keyboard.removeKey(this._confirmKeyEsc);
+                this._confirmKeyEsc = null;
+            }
+
+            if (container) container.destroy();
+            if (blocker) blocker.destroy();
+            this.confirmationModal = null;
+        };
+
+        yesBtn.on('pointerdown', () => {
+            try { if (onConfirm) onConfirm(); } finally { cleanup(); }
+        });
+
+        noBtn.on('pointerdown', () => {
+            try { if (onCancel) onCancel(); } finally { cleanup(); }
+        });
+
+        // Keyboard shortcuts: Enter confirms, Escape cancels
+        this._confirmKeyEnter = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ENTER);
+        this._confirmKeyEsc = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+
+        const keyHandler = (event) => {
+            if (event.keyCode === Phaser.Input.Keyboard.KeyCodes.ENTER) {
+                if (onConfirm) onConfirm();
+                cleanup();
+            } else if (event.keyCode === Phaser.Input.Keyboard.KeyCodes.ESC) {
+                if (onCancel) onCancel();
+                cleanup();
+            }
+        };
+
+        this.input.keyboard.on('keydown', keyHandler);
+
+        container.add([bg, text, yesBtn, noBtn]);
+
+        // Prevent clicks from falling through the modal
+        container.setInteractive(new Phaser.Geom.Rectangle(0, 0, width, height), Phaser.Geom.Rectangle.Contains);
+
+        // Add blocker + modal into UI container so it's always visible on top of UI
+        if (this.uiContainer) {
+            this.uiContainer.add(blocker);
+            this.uiContainer.add(container);
+        }
+
+        // If a temporary building clone exists in the UI and the modal would overlap it,
+        // try to reposition the modal so the user can see the clone.
+        try {
+            if (this.tempBuildingSprite && this.tempBuildingWorldPos && container) {
+                const cam = this.cameras.main;
+                // temp sprite is placed in UI coords (scrollFactor 0), so compare directly
+                const temp = this.tempBuildingSprite;
+                const tempWidth = temp.displayWidth || (temp.width || 0);
+                const tempHeight = temp.displayHeight || (temp.height || 0);
+                // We set origin(0.5,1) for the temp sprite when created
+                const tempLeft = temp.x - (tempWidth * 0.5);
+                const tempTop = temp.y - tempHeight;
+                const tempRight = temp.x + (tempWidth * 0.5);
+                const tempBottom = temp.y;
+
+                let modalLeft = x;
+                let modalTop = y;
+                const modalRight = modalLeft + width;
+                const modalBottom = modalTop + height;
+
+                const rectsOverlap = (aLeft, aTop, aRight, aBottom, bLeft, bTop, bRight, bBottom) => {
+                    return !(aLeft >= bRight || aRight <= bLeft || aTop >= bBottom || aBottom <= bTop);
+                };
+
+                if (rectsOverlap(modalLeft, modalTop, modalRight, modalBottom, tempLeft, tempTop, tempRight, tempBottom)) {
+                    // Try place modal above the temp sprite
+                    let newX = modalLeft;
+                    let newY = tempTop - height - 10;
+                    // If above would go off-screen, try below
+                    if (newY < 0) {
+                        newY = tempBottom + 10;
+                    }
+                    // If still off-screen vertically, try left
+                    if (newY < 0 || (newY + height) > cam.height) {
+                        newX = tempLeft - width - 10;
+                        newY = modalTop; // keep original top for now
+                    }
+                    // If left is off-screen, try right
+                    if (newX < 0 || (newX + width) > cam.width) {
+                        newX = tempRight + 10;
+                    }
+
+                    // Clamp within viewport
+                    newX = Math.max(10, Math.min(newX, cam.width - width - 10));
+                    newY = Math.max(10, Math.min(newY, cam.height - height - 10));
+
+                    container.x = newX;
+                    container.y = newY;
+                }
+            }
+        } catch (e) {
+            // Non-fatal; leave modal centered if repositioning fails
+            console.warn('Modal repositioning failed:', e);
+        }
+
+         // Store reference and return
+         this.confirmationModal = container;
+         return container;
+    }
+
     create() {
         this.setupWorldAndCamera();
-        
+
         // World Container (Zoomable/Rotatable)
         this.worldContainer = this.add.container(0, 0);
-        
+
         // UI Container (Static)
         this.uiContainer = this.add.container(0, 0);
         this.uiContainer.setScrollFactor(0); // Extra safety
-        
+
         // Sub-container for editor tools
         this.editorUI = this.add.container(0, 0);
         this.uiContainer.add(this.editorUI);
@@ -159,13 +321,13 @@ export default class LevelEditorScene extends Phaser.Scene {
 
         // Background Camera (Bottom)
         this.bgCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
-        
+
         // UI Camera (Top)
         this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
 
         // Sort Cameras: [BG, Main (World), UI]
         this.cameras.cameras = [this.bgCamera, this.cameras.main, this.uiCamera];
-        
+
         // Ignore Rules
         this.cameras.main.ignore([this.bg, this.uiContainer]);
         this.bgCamera.ignore([this.worldContainer, this.uiContainer, this.previewActor]);
@@ -195,6 +357,19 @@ export default class LevelEditorScene extends Phaser.Scene {
             this.updatePlayMode();
             this.updateBallPhysics(delta);
         }
+
+        // Re-project temporary building clone (UI sprite) to follow camera movement while confirmation modal is open
+        if (this.tempBuildingSprite && this.tempBuildingWorldPos && this.confirmationModal) {
+            try {
+                const cam = this.cameras.main;
+                const screenX = (this.tempBuildingWorldPos.x - cam.worldView.x) * cam.zoom;
+                const screenY = (this.tempBuildingWorldPos.y - cam.worldView.y) * cam.zoom;
+                this.tempBuildingSprite.x = screenX;
+                this.tempBuildingSprite.y = screenY;
+            } catch (e) {
+                // ignore
+            }
+        }
     }
 
     updateBallPhysics(delta) {
@@ -202,10 +377,10 @@ export default class LevelEditorScene extends Phaser.Scene {
 
         const dt = delta / 1000;
         const d = this.rollData.v * delta; // Distance to move this frame
-        
+
         this.rollData.x += this.rollData.dx * d;
         this.rollData.y += this.rollData.dy * d;
-        
+
         this.ball.x = this.rollData.x;
         this.ball.y = this.rollData.y;
 
@@ -244,12 +419,12 @@ export default class LevelEditorScene extends Phaser.Scene {
 
         // Apply Friction
         let friction = 0.92; // Balanced
-        if (terrain === 'green') friction = 0.96; 
-        if (terrain === 'rough') friction = 0.81; 
+        if (terrain === 'green') friction = 0.96;
+        if (terrain === 'rough') friction = 0.81;
         if (terrain === 'out') friction = 0.85;
 
         // We apply friction per frame, but let's normalize it to time
-        this.rollData.v *= Math.pow(friction, delta / 16); 
+        this.rollData.v *= Math.pow(friction, delta / 16);
 
         if (this.rollData.v < 0.03) { // Slightly lower stop threshold
             this.isBallRolling = false;
@@ -261,7 +436,7 @@ export default class LevelEditorScene extends Phaser.Scene {
 
     generateTileTextures() {
         const gfx = this.add.graphics();
-    
+
         // Generate a texture for each tile type
         for (const [key, color] of Object.entries(TILE_TYPES)) {
             // If texture exists, destroy it to ensure we regenerate it (hot reload support)
@@ -272,7 +447,7 @@ export default class LevelEditorScene extends Phaser.Scene {
             gfx.clear();
             gfx.fillStyle(color);
             gfx.lineStyle(1, 0x0b6e0b, 0.1);
-    
+
             // Draw diamond shape
             gfx.beginPath();
             gfx.moveTo(0, TILE_SIZE.height / 2);
@@ -286,24 +461,24 @@ export default class LevelEditorScene extends Phaser.Scene {
             if (key === 'fairway') {
                 gfx.lineStyle(4, 0x4a852a, 0.5); // Darker green stripes for new base color
                 const numStripes = 4;
-                
+
                 for (let i = 1; i < numStripes; i++) {
                     const t = i / numStripes;
-                    
+
                     // Start point on Top-Left edge
                     const x1 = (TILE_SIZE.width / 2) * (1 - t);
                     const y1 = (TILE_SIZE.height / 2) * t;
-                    
+
                     // End point on Bottom-Right edge
                     const x2 = TILE_SIZE.width - (TILE_SIZE.width / 2) * t;
                     const y2 = (TILE_SIZE.height / 2) + (TILE_SIZE.height / 2) * t;
-                    
+
                     gfx.beginPath();
                     gfx.moveTo(x1, y1);
                     gfx.lineTo(x2, y2);
                     gfx.strokePath();
                 }
-                
+
                 // Redraw outline to ensure crisp edges
                 gfx.lineStyle(1, 0x000000, 0.1);
                 gfx.beginPath();
@@ -315,18 +490,18 @@ export default class LevelEditorScene extends Phaser.Scene {
             }
 
             gfx.strokePath();
-    
+
             if (key === 'tee') {
                 // Draw Markers
                 gfx.fillStyle(0xffffff); // White markers
                 const markerRadius = 2; // Smaller radius for scale
-                
+
                 // Draw as isometric ellipses (squashed circles)
                 // Marker 1
                 gfx.fillEllipse(TILE_SIZE.width * 0.25, TILE_SIZE.height * 0.5, markerRadius * 2, markerRadius);
                 // Marker 2
                 gfx.fillEllipse(TILE_SIZE.width * 0.75, TILE_SIZE.height * 0.5, markerRadius * 2, markerRadius);
-                
+
                 // Add a slight shadow/border to markers for visibility
                 gfx.lineStyle(1, 0x888888);
                 gfx.strokeEllipse(TILE_SIZE.width * 0.25, TILE_SIZE.height * 0.5, markerRadius * 2, markerRadius);
@@ -335,7 +510,7 @@ export default class LevelEditorScene extends Phaser.Scene {
 
             gfx.generateTexture(key, TILE_SIZE.width, TILE_SIZE.height);
         }
-        
+
         // Decorations
         for (const [key, value] of Object.entries(DECO_TYPES)) {
             gfx.clear();
@@ -345,15 +520,15 @@ export default class LevelEditorScene extends Phaser.Scene {
                 const centerY = value.size.h - 4; // Near bottom
                 const cupWidth = 8;
                 const cupHeight = 4;
-                
+
                 // The Cup (black ellipse)
                 gfx.fillStyle(0x000000);
                 gfx.fillEllipse(centerX, centerY, cupWidth, cupHeight);
-                
+
                 // The Pole
                 gfx.lineStyle(1, 0xdddddd);
                 gfx.lineBetween(centerX, centerY, centerX, 10);
-                
+
                 // The Flag (tiny red triangle)
                 gfx.fillStyle(0xff0000);
                 gfx.beginPath();
@@ -366,6 +541,29 @@ export default class LevelEditorScene extends Phaser.Scene {
                 gfx.fillRect(0, 0, value.size.w, value.size.h);
             }
             gfx.generateTexture(key, value.size.w, value.size.h);
+        }
+
+        // Buildings (simple generated sprite for preview/placement)
+        for (const [key, value] of Object.entries(BUILDING_TYPES)) {
+            gfx.clear();
+            // Calculate pixel size based on tiles
+            const w = value.size.tilesW * TILE_SIZE.width;
+            const h = value.size.tilesH * TILE_SIZE.height + 20; // extra for roof
+
+            // Draw base rectangle simulating walls
+            gfx.fillStyle(value.color);
+            gfx.fillRect(0, h - (TILE_SIZE.height * value.size.tilesH), w, TILE_SIZE.height * value.size.tilesH);
+
+            // Draw roof as a triangle
+            gfx.fillStyle(value.roofColor || 0x555555);
+            gfx.beginPath();
+            gfx.moveTo(0, h - (TILE_SIZE.height * value.size.tilesH));
+            gfx.lineTo(w / 2, 0);
+            gfx.lineTo(w, h - (TILE_SIZE.height * value.size.tilesH));
+            gfx.closePath();
+            gfx.fillPath();
+
+            gfx.generateTexture(key, w, h);
         }
 
         // Golfer
@@ -423,6 +621,7 @@ export default class LevelEditorScene extends Phaser.Scene {
                     type: 'grass',
                     height: 0,
                     decoration: null,
+                    building: null,
                     holeId: null
                 };
             }
@@ -461,22 +660,40 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.uiButtons = {}; // Store button references
 
         // --- HUD ELEMENTS (Always Visible) ---
-        const toggleEditorBtn = this.add.text(20, this.cameras.main.height - 50, '🛠 EDIT COURSE', {
+        const toggleEditorBtn = this.add.text(20, this.cameras.main.height - 50, 'Design', {
             fontFamily: '"Outfit", sans-serif',
             fontSize: '16px',
             fill: '#fff',
             backgroundColor: '#34495e',
-            padding: { x: 15, y: 10 },
+            padding: { x: 10, y: 10 },
             fontStyle: 'bold'
         })
         .setInteractive({ useHandCursor: true })
         .setDepth(uiDepth + 100);
-        
+
         this.uiContainer.add(toggleEditorBtn);
         toggleEditorBtn.on('pointerdown', () => this.toggleEditor());
 
+        // Build Button (next to Edit Course)
+        const buildModeBtn = this.add.text(140, this.cameras.main.height - 50, 'Build', {
+             fontFamily: '"Outfit", sans-serif',
+             fontSize: '16px',
+             fill: '#fff',
+             backgroundColor: '#8b572a',
+             padding: { x: 15, y: 10 },
+             fontStyle: 'bold'
+         })
+         .setInteractive({ useHandCursor: true })
+         .setDepth(uiDepth + 100);
+
+         this.uiContainer.add(buildModeBtn);
+         buildModeBtn.on('pointerdown', () => this.toggleBuildMode());
+
+        // Build UI (buildings panel)
+        this.createBuildUI();
+
         // --- EDITOR UI (Toggable) ---
-        
+
         // Sidebar Background
         const uiPanel = this.add.graphics();
         uiPanel.fillStyle(0x222222, 0.95);
@@ -663,27 +880,155 @@ export default class LevelEditorScene extends Phaser.Scene {
     }
 
     toggleEditor() {
+        // Toggle editor visibility. If opening the editor, ensure Build UI is closed.
         this.showEditor = !this.showEditor;
         this.editorUI.setVisible(this.showEditor);
+
+        if (this.showEditor) {
+            // If the Build UI is open, close it to keep them mutually exclusive
+            if (this.buildUI && this.buildUI.visible) {
+                this.isBuildMode = false;
+                this.buildUI.setVisible(false);
+            }
+        }
+
         this.showNotification(this.showEditor ? "EDITOR OPENED" : "EDITOR CLOSED", "#ffffff");
+    }
+
+    toggleBuildMode() {
+        // Toggle Build UI and ensure the Design/Editor UI is not visible at the same time.
+        this.isBuildMode = !this.isBuildMode;
+        if (this.buildUI) this.buildUI.setVisible(this.isBuildMode);
+
+        if (this.isBuildMode) {
+            // Opening Build: hide the editor UI but don't change the persisted showEditor flag
+            if (this.editorUI) this.editorUI.setVisible(false);
+        } else {
+            // Closing Build: restore the editor UI visibility based on the user's flag
+            if (this.editorUI) this.editorUI.setVisible(this.showEditor);
+        }
+
+        this.showNotification(this.isBuildMode ? "BUILD MODE ENABLED" : "BUILD MODE DISABLED", "#ffffff");
+    }
+
+    // Build UI: a small panel listing available buildings only
+    createBuildUI() {
+        // Create a container under uiContainer so it doesn't get affected by world transforms
+        this.buildUI = this.add.container(20, 80).setDepth(15000);
+        this.uiContainer.add(this.buildUI);
+
+        const width = 220;
+        const height = 80 + (BUILDING_NAMES.length * 36);
+
+        const bg = this.add.graphics();
+        bg.fillStyle(0x111111, 0.95);
+        bg.fillRoundedRect(0, 0, width, height, 8);
+        bg.lineStyle(2, 0xffffff, 0.08);
+        bg.strokeRoundedRect(0, 0, width, height, 8);
+        this.buildUI.add(bg);
+
+        const title = this.add.text(width / 2, 14, 'BUILDINGS', { fontFamily: '"Outfit", sans-serif', fontSize: '14px', fill: '#fff', fontStyle: 'bold' }).setOrigin(0.5);
+        this.buildUI.add(title);
+
+        // Buttons map
+        this.buildButtons = {};
+
+        let y = 40;
+        const x = 12;
+        const btnW = width - 24;
+
+        BUILDING_NAMES.forEach(bName => {
+            const btn = this.add.text(x, y, bName.toUpperCase(), {
+                fontFamily: '"Outfit", sans-serif',
+                fontSize: '14px',
+                fill: '#fff',
+                backgroundColor: '#333',
+                padding: { x: 8, y: 6 },
+                fixedWidth: btnW
+            }).setInteractive({ useHandCursor: true });
+
+            btn.on('pointerdown', () => {
+                // If selecting clubhouse and one already exists, notify and block
+                if (bName === 'clubhouse') {
+                    const existing = this.findBuildingByName('clubhouse');
+                    if (existing) {
+                        this.showNotification('A Clubhouse already exists', '#ff0000');
+                        return;
+                    }
+                }
+
+                // Activate build mode UI and select the building tool
+                this.isBuildMode = true;
+                if (this.buildUI) this.buildUI.setVisible(true);
+                if (this.editorUI) this.editorUI.setVisible(false);
+
+                this.selectedTileType = bName;
+                this.updateButtonStyles();
+                this.showNotification(`${bName.toUpperCase()} selected - Click on the map to place`, '#ffffff');
+            });
+
+            this.buildUI.add(btn);
+            this.buildButtons[bName] = btn;
+
+            y += 36;
+        });
+
+        // Initially hidden; toggled with Build button
+        this.buildUI.setVisible(false);
+    }
+
+    // Return first building reference by name if present on grid, otherwise null
+    findBuildingByName(name) {
+        for (let y = 0; y < GRID_SIZE.height; y++) {
+            for (let x = 0; x < GRID_SIZE.width; x++) {
+                const b = this.gridData[y][x].building;
+                if (b && b.name === name) return b;
+            }
+        }
+        return null;
+    }
+
+    // Disable a build button (used when a one-of-a-kind building is placed or restored)
+    disableBuildButton(name) {
+        if (!this.buildButtons) return;
+        const btn = this.buildButtons[name];
+        if (!btn) return;
+        btn.disableInteractive();
+        btn.setBackgroundColor('#555');
+        btn.setColor('#999');
     }
 
     saveCourse() {
         this.quickSave('auto');
         // Serialize gridData (replace sprite refs with type names)
-        const serializedGrid = this.gridData.map(row => 
+        const serializedGrid = this.gridData.map(row =>
             row.map(tile => ({
                 type: tile.type,
                 height: tile.height,
                 decoration: tile.decoration ? tile.decoration.texture.key : null,
-                holeId: tile.holeId
+                holeId: tile.holeId,
+                building: tile.building ? tile.building.name : null
             }))
         );
+
+        // Gather unique building footprints to store as separate list
+        const buildings = [];
+        const seen = new Set();
+        for (let y = 0; y < GRID_SIZE.height; y++) {
+            for (let x = 0; x < GRID_SIZE.width; x++) {
+                const b = this.gridData[y][x].building;
+                if (b && !seen.has(b)) {
+                    buildings.push({ name: b.name, footprint: b.footprint });
+                    seen.add(b);
+                }
+            }
+        }
 
         const data = {
             course: this.course,
             gridData: serializedGrid,
-            viewRotation: this.viewRotation
+            viewRotation: this.viewRotation,
+            buildings
         };
 
         const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
@@ -696,24 +1041,44 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.showNotification("Course Exported!", "#00ff00");
     }
 
-    loadCourse() {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json';
-        input.onchange = (e) => {
-            const file = e.target.files[0];
-            const reader = new FileReader();
-            reader.onload = (event) => {
-                try {
-                    const data = JSON.parse(event.target.result);
-                    this.importCourse(data);
-                } catch (err) {
-                    this.showNotification("Invalid JSON File!", "#ff0000");
+    quickSave(slotId = null) {
+        const id = slotId || this.currentSlot;
+        const serializedGrid = this.gridData.map(row =>
+            row.map(tile => ({
+                type: tile.type,
+                height: tile.height,
+                decoration: tile.decoration ? tile.decoration.texture.key : null,
+                holeId: tile.holeId,
+                building: tile.building ? tile.building.name : null
+            }))
+        );
+
+        // Gather unique building footprints to store as separate list
+        const buildings = [];
+        const seen = new Set();
+        for (let y = 0; y < GRID_SIZE.height; y++) {
+            for (let x = 0; x < GRID_SIZE.width; x++) {
+                const b = this.gridData[y][x].building;
+                if (b && !seen.has(b)) {
+                    buildings.push({ name: b.name, footprint: b.footprint });
+                    seen.add(b);
                 }
-            };
-            reader.readAsText(file);
+            }
+        }
+
+        const data = {
+            clubName: this.clubName,
+            course: this.course,
+            gridData: serializedGrid,
+            viewRotation: this.viewRotation,
+            buildings,
+            timestamp: new Date().getTime()
         };
-        input.click();
+
+        localStorage.setItem(`iso_golf_save_${id}`, JSON.stringify(data));
+        if (id !== 'auto') {
+            this.showNotification(`Saved to Slot ${id}`, "#00ff00");
+        }
     }
 
     importCourse(data) {
@@ -727,13 +1092,17 @@ export default class LevelEditorScene extends Phaser.Scene {
                 if (this.gridData[y][x].decoration) {
                     this.gridData[y][x].decoration.destroy();
                 }
+                // remove buildings
+                if (this.gridData[y][x].building) {
+                    if (this.gridData[y][x].building.sprite) this.gridData[y][x].building.sprite.destroy();
+                }
             }
         }
 
         // Restore Data
         this.course = data.course;
         this.viewRotation = data.viewRotation || 0;
-        
+
         // Reconstruct gridData and visuals
         for (let y = 0; y < GRID_SIZE.height; y++) {
             for (let x = 0; x < GRID_SIZE.width; x++) {
@@ -742,7 +1111,8 @@ export default class LevelEditorScene extends Phaser.Scene {
                     type: tileData.type,
                     height: tileData.height,
                     holeId: tileData.holeId,
-                    decoration: null
+                    decoration: null,
+                    building: null
                 };
 
                 // Re-spawn Decoration if it exists
@@ -756,9 +1126,51 @@ export default class LevelEditorScene extends Phaser.Scene {
             }
         }
 
+        // Restore buildings if present
+        if (data.buildings && Array.isArray(data.buildings)) {
+            // Use centralized placement so building footprints are applied consistently
+            data.buildings.forEach(b => {
+                const bDef = BUILDING_TYPES[b.name];
+                if (!bDef || !b.footprint) return;
+                const { x: sx, y: sy } = b.footprint;
+                // Place building without confirmation (importing)
+                this.placeBuildingAt(b.name, sx, sy, { skipNotification: true });
+            });
+        }
+
         this.refreshAllTiles();
         this.updateChecklist();
         this.showNotification("Course Loaded Successfully!", "#00ff00");
+    }
+
+    // Centralized helper to place a building at a footprint origin (startX, startY)
+    // This updates gridData and creates the sprite. Callers should perform validation before calling.
+    placeBuildingAt(name, startX, startY, opts = {}) {
+        const bDef = BUILDING_TYPES[name];
+        if (!bDef) return null;
+
+        const centerX = startX + (bDef.size.tilesW / 2) - 0.5;
+        const centerY = startY + (bDef.size.tilesH / 2) - 0.5;
+        const pos = this.gridToIso(centerX, centerY, 0);
+
+        const sprite = this.add.sprite(pos.x, pos.y, name);
+        sprite.setOrigin(0.5, 1);
+        this.worldContainer.add(sprite);
+
+        const buildingRef = { name, sprite, footprint: { x: startX, y: startY, w: bDef.size.tilesW, h: bDef.size.tilesH } };
+        for (let yy = startY; yy < startY + bDef.size.tilesH; yy++) {
+            for (let xx = startX; xx < startX + bDef.size.tilesW; xx++) {
+                // guard in case of out-of-range data
+                if (this.gridData[yy] && this.gridData[yy][xx]) this.gridData[yy][xx].building = buildingRef;
+            }
+        }
+
+        if (name === 'clubhouse') {
+            this.disableBuildButton('clubhouse');
+        }
+
+        if (!opts.skipNotification) this.showNotification(`${name} placed`, '#00ff00');
+        return buildingRef;
     }
 
     enterPlayMode() {
@@ -818,7 +1230,7 @@ export default class LevelEditorScene extends Phaser.Scene {
     exitPlayMode() {
         this.editorState = 'IDLE';
         this.canSwing = false;
-        
+
         // Restore Editor UI if it was open
         this.editorUI.setVisible(this.showEditor);
 
@@ -894,7 +1306,7 @@ export default class LevelEditorScene extends Phaser.Scene {
     launchBall(endX, endY) {
         const startX = this.ball.x;
         const startY = this.ball.y;
-        
+
         const dist = Phaser.Math.Distance.Between(startX, startY, endX, endY);
         const maxHeight = Math.min(dist / 2, 150);
         const midX = (startX + endX) / 2;
@@ -904,7 +1316,7 @@ export default class LevelEditorScene extends Phaser.Scene {
 
         // 1. FLIGHT PHASE
         const flightDuration = 600 + (dist / 1.5);
-        
+
         this.tweens.add({
             targets: { t: 0 },
             t: 1,
@@ -913,11 +1325,11 @@ export default class LevelEditorScene extends Phaser.Scene {
             onUpdate: (tween) => {
                 if (!this.ball) return;
                 const curT = tween.getValue();
-                
+
                 // Path on the ground plane (Linear)
                 this.ball.x = (1 - curT) * (1 - curT) * startX + 2 * (1 - curT) * curT * midX + curT * curT * endX;
                 this.ball.y = (1 - curT) * (1 - curT) * startY + 2 * (1 - curT) * curT * midY + curT * curT * endY;
-                
+
                 // Visual Height (Parabolic scale/offset)
                 const height = Math.sin(curT * Math.PI);
                 this.ball.setScale(1 + height * 0.6);
@@ -997,7 +1409,7 @@ export default class LevelEditorScene extends Phaser.Scene {
                 const curT = tween.getValue();
                 this.ball.x = (1 - curT) * (1 - curT) * startX + 2 * (1 - curT) * curT * midX + curT * curT * endX;
                 this.ball.y = (1 - curT) * (1 - curT) * startY + 2 * (1 - curT) * curT * midY + curT * curT * endY;
-                
+
                 const height = Math.sin(curT * Math.PI);
                 this.ball.y -= height * (dist / 10); // Shorter height
             },
@@ -1078,7 +1490,7 @@ export default class LevelEditorScene extends Phaser.Scene {
             rotLeft: Phaser.Input.Keyboard.KeyCodes.Q,
             rotRight: Phaser.Input.Keyboard.KeyCodes.E
         });
-        
+
         let isDragging = false;
         let startX = 0;
         let startY = 0;
@@ -1123,7 +1535,7 @@ export default class LevelEditorScene extends Phaser.Scene {
                 if (this.editorState === 'IDLE') {
                     const gridX = gameObject.getData('gridX');
                     const gridY = gameObject.getData('gridY');
-                    
+
                     if (gridX !== undefined && gridY !== undefined) {
                         const tileData = this.gridData[gridY][gridX];
                         if (tileData.type === 'tee') {
@@ -1136,7 +1548,7 @@ export default class LevelEditorScene extends Phaser.Scene {
                         }
                     }
                 }
-                
+
                 // If popup is open and we click elsewhere, close it
                 if (this.popup) {
                     this.popup.destroy();
@@ -1226,7 +1638,7 @@ export default class LevelEditorScene extends Phaser.Scene {
     worldToGrid(wx, wy) {
         const centerX = (GRID_SIZE.width * TILE_SIZE.width) / 2;
         const raw = screenToIso(wx, wy, TILE_SIZE.width, TILE_SIZE.height, centerX, 0);
-        
+
         let x = raw.x;
         let y = raw.y;
         const maxW = GRID_SIZE.width - 1;
@@ -1286,7 +1698,7 @@ export default class LevelEditorScene extends Phaser.Scene {
         // Add to course data
         this.course.holes.push(this.currentHole);
         this.showNotification(`Hole ${this.currentHole.number} Finalized!`, '#00ff00');
-        
+
         // Reset state
         this.editorState = 'IDLE';
         this.currentHole = null;
@@ -1296,20 +1708,35 @@ export default class LevelEditorScene extends Phaser.Scene {
 
     quickSave(slotId = null) {
         const id = slotId || this.currentSlot;
-        const serializedGrid = this.gridData.map(row => 
+        const serializedGrid = this.gridData.map(row =>
             row.map(tile => ({
                 type: tile.type,
                 height: tile.height,
                 decoration: tile.decoration ? tile.decoration.texture.key : null,
-                holeId: tile.holeId
+                holeId: tile.holeId,
+                building: tile.building ? tile.building.name : null
             }))
         );
+
+        // Gather unique building footprints to store as separate list
+        const buildings = [];
+        const seen = new Set();
+        for (let y = 0; y < GRID_SIZE.height; y++) {
+            for (let x = 0; x < GRID_SIZE.width; x++) {
+                const b = this.gridData[y][x].building;
+                if (b && !seen.has(b)) {
+                    buildings.push({ name: b.name, footprint: b.footprint });
+                    seen.add(b);
+                }
+            }
+        }
 
         const data = {
             clubName: this.clubName,
             course: this.course,
             gridData: serializedGrid,
             viewRotation: this.viewRotation,
+            buildings,
             timestamp: new Date().getTime()
         };
 
@@ -1343,7 +1770,7 @@ export default class LevelEditorScene extends Phaser.Scene {
         }
         return null;
     }
-    
+
     findTileByDecoration(decoType) {
         for (let y = 0; y < GRID_SIZE.height; y++) {
             for (let x = 0; x < GRID_SIZE.width; x++) {
@@ -1363,12 +1790,12 @@ export default class LevelEditorScene extends Phaser.Scene {
         }
 
         const holeNumber = this.course.holes.length + 1;
-        this.currentHole = { 
-            number: holeNumber, 
-            tee: null, 
-            cup: null 
+        this.currentHole = {
+            number: holeNumber,
+            tee: null,
+            cup: null
         };
-        
+
         this.editorState = 'PLACING_TEE';
         this.selectedTileType = 'tee';
         this.updateChecklist();
@@ -1379,8 +1806,105 @@ export default class LevelEditorScene extends Phaser.Scene {
     paintTile(tile) {
         const gridX = tile.getData('gridX');
         const gridY = tile.getData('gridY');
-        
-        if (gridX === undefined || gridY === undefined) {
+
+        if (gridX === undefined || gridY === undefined) return;
+
+        // Building placement
+        if (BUILDING_NAMES.includes(this.selectedTileType)) {
+            const bName = this.selectedTileType;
+
+            // Enforce one-of-a-kind for clubhouse (check first so we don't show a modal unnecessarily)
+            if (bName === 'clubhouse') {
+                const existing = this.findBuildingByName('clubhouse');
+                if (existing) {
+                    this.showNotification('A Clubhouse already exists', '#ff0000');
+                    return;
+                }
+            }
+
+            const bDef = BUILDING_TYPES[bName];
+            const startX = gridX - Math.floor(bDef.size.tilesW / 2);
+            const startY = gridY - Math.floor(bDef.size.tilesH / 2);
+
+            // Bounds check
+            if (startX < 0 || startY < 0 || (startX + bDef.size.tilesW) > GRID_SIZE.width || (startY + bDef.size.tilesH) > GRID_SIZE.height) {
+                this.showNotification('Cannot place building: Out of bounds', '#ff0000');
+                return;
+            }
+
+            // Occupancy check
+            for (let yy = startY; yy < startY + bDef.size.tilesH; yy++) {
+                for (let xx = startX; xx < startX + bDef.size.tilesW; xx++) {
+                    if (this.gridData[yy][xx].building) {
+                        this.showNotification('Cannot place building: Space occupied', '#ff0000');
+                        return;
+                    }
+                }
+            }
+
+            // Prevent multiple confirmation modals
+            if (this.confirmationModal) return;
+
+            const confirmMsg = `Place ${bName.toUpperCase()} (${bDef.size.tilesW}x${bDef.size.tilesH}) here?`;
+
+            // Prepare the actual placement and cancellation callbacks and ensure they clean up the temporary clone
+            const doPlace = () => {
+                try {
+                    if (this.tempBuildingSprite) { this.tempBuildingSprite.destroy(); this.tempBuildingSprite = null; this.tempBuildingWorldPos = null; }
+                } finally {
+                    if (this.previewActor) this.previewActor.setVisible(false);
+                    this.placeBuildingAt(bName, startX, startY);
+                }
+            };
+
+            const onCancel = () => {
+                if (this.tempBuildingSprite) { this.tempBuildingSprite.destroy(); this.tempBuildingSprite = null; this.tempBuildingWorldPos = null; }
+                this.showNotification('Placement cancelled', '#ffffff');
+                if (this.previewActor) this.previewActor.setVisible(false);
+            };
+
+            // Create a temporary clone sprite that will remain fixed while confirmation modal is open
+            try {
+                const centerX = startX + (bDef.size.tilesW / 2) - 0.5;
+                const centerY = startY + (bDef.size.tilesH / 2) - 0.5;
+                const pos = this.gridToIso(centerX, centerY, 0);
+
+                // Destroy any previous temp sprite
+                if (this.tempBuildingSprite) {
+                    this.tempBuildingSprite.destroy();
+                    this.tempBuildingSprite = null;
+                    this.tempBuildingWorldPos = null;
+                }
+
+                if (this.textures.exists(bName)) {
+                    // Create UI-layer clone (so it's always above modal) and store world position for reprojection
+                    const cam = this.cameras.main;
+                    const screenX = (pos.x - cam.worldView.x) * cam.zoom;
+                    const screenY = (pos.y - cam.worldView.y) * cam.zoom;
+
+                    this.tempBuildingSprite = this.add.sprite(screenX, screenY, bName);
+                    this.tempBuildingSprite.setOrigin(0.5, 1);
+                    this.tempBuildingSprite.setAlpha(0.95);
+                    this.tempBuildingSprite.setScrollFactor(0);
+                    this.tempBuildingSprite.setDepth(31000);
+
+                    this.tempBuildingWorldPos = { x: pos.x, y: pos.y };
+
+                    if (this.uiContainer) {
+                        this.uiContainer.add(this.tempBuildingSprite);
+                    } else {
+                        this.add.existing(this.tempBuildingSprite);
+                    }
+
+                    // Hide the standard preview actor because we're showing a proper clone
+                    if (this.previewActor) this.previewActor.setVisible(false);
+                 }
+            } catch (e) {
+                console.warn('Failed to create temp building clone for confirmation:', e);
+            }
+
+            // Use in-game confirmation modal; temp clone will remain visible because updatePreview() early-returns while modal exists
+            this.createConfirmationModal(confirmMsg, () => doPlace(), () => onCancel());
             return;
         }
 
@@ -1415,7 +1939,7 @@ export default class LevelEditorScene extends Phaser.Scene {
                 if (this.editorState !== 'CONSTRUCTING') {
                     // Allow placing cup if we are in CONSTRUCTING (tee placed)
                     // If we are just placing tee, state is PLACING_TEE
-                    return; 
+                    return;
                 }
 
                 // Changed: Cup can be placed anywhere, it will MAKE the tile green.
@@ -1439,10 +1963,10 @@ export default class LevelEditorScene extends Phaser.Scene {
 
                 // 2. Store Cup Data
                 this.currentHole.cup = { x: gridX, y: gridY };
-                
+
                 // 3. Do NOT Finalize. Update checklist and switch tool.
                 this.updateChecklist();
-                this.selectedTileType = 'green'; 
+                this.selectedTileType = 'green';
                 this.updateButtonStyles();
                 this.showNotification("Cup Placed. Paint the green, then press 'H' to finish.", '#ffffff');
             }
@@ -1451,7 +1975,7 @@ export default class LevelEditorScene extends Phaser.Scene {
             if (this.gridData[gridY][gridX].decoration) {
                 this.gridData[gridY][gridX].decoration.destroy();
             }
-            
+
             const isoPos = this.gridToIso(gridX, gridY, this.gridData[gridY][gridX].height);
             const deco = this.add.sprite(isoPos.x, isoPos.y, decoType);
             deco.setOrigin(0.5, 1);
@@ -1469,7 +1993,7 @@ export default class LevelEditorScene extends Phaser.Scene {
             }
 
             const currentTile = this.gridData[gridY][gridX];
-            
+
             // Prevent overwriting Tile with Cup
             if (currentTile.decoration && currentTile.decoration.texture.key === 'cup') {
                 return;
@@ -1481,7 +2005,7 @@ export default class LevelEditorScene extends Phaser.Scene {
                 if (this.editorState !== 'PLACING_TEE' && this.editorState !== 'CONSTRUCTING') {
                     return;
                 }
-                
+
                 // If moving tee, clear old one
                 if (this.currentHole && this.currentHole.tee) {
                     const oldTee = this.currentHole.tee;
@@ -1493,7 +2017,7 @@ export default class LevelEditorScene extends Phaser.Scene {
 
                 this.currentHole.tee = { x: gridX, y: gridY };
                 this.editorState = 'CONSTRUCTING'; // Advance state
-                
+
                 if (this.selectedTileType === 'tee') { // If using the tool
                      this.selectedTileType = 'cup'; // Auto-switch to Cup
                      this.updateButtonStyles();
@@ -1524,7 +2048,7 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.refreshTile(gridX, gridY);
         this.updateChecklist();
     }
-    
+
     refreshTile(x, y) {
         const tile = this.tileSprites[y][x];
         if (tile) {
@@ -1532,7 +2056,7 @@ export default class LevelEditorScene extends Phaser.Scene {
             const isoPos = this.gridToIso(x, y, this.gridData[y][x].height);
             tile.x = isoPos.x;
             tile.y = isoPos.y;
-            
+
             // Depth sorting
             tile.depth = isoPos.y + tile.height;
 
@@ -1560,22 +2084,22 @@ export default class LevelEditorScene extends Phaser.Scene {
         this.checklistPanel.setInteractive(new Phaser.Geom.Rectangle(x, y, width, height), Phaser.Geom.Rectangle.Contains);
         this.editorUI.add(this.checklistPanel);
 
-        this.checklistTitle = this.add.text(x + 105, y + 20, '', { 
+        this.checklistTitle = this.add.text(x + 105, y + 20, '', {
             fontFamily: '"Outfit", sans-serif',
-            fontSize: '16px', 
-            fill: '#fff', 
-            fontStyle: 'bold' 
+            fontSize: '16px',
+            fill: '#fff',
+            fontStyle: 'bold'
         })
             .setOrigin(0.5).setDepth(uiDepth);
         this.editorUI.add(this.checklistTitle);
-        
+
         this.checkItems = [];
         const items = ['Place Tee', 'Place Cup', 'Build Hole', 'Press H to Finish'];
         items.forEach((item, index) => {
-            const text = this.add.text(x + 20, y + 50 + (index * 25), `[ ] ${item}`, { 
+            const text = this.add.text(x + 20, y + 50 + (index * 25), `[ ] ${item}`, {
                 fontFamily: '"Outfit", sans-serif',
-                fontSize: '14px', 
-                fill: '#888' 
+                fontSize: '14px',
+                fill: '#888'
             }).setDepth(uiDepth);
             this.checkItems.push({ key: item, obj: text });
             this.editorUI.add(text);
@@ -1587,7 +2111,7 @@ export default class LevelEditorScene extends Phaser.Scene {
     updateChecklist() {
         if (this.editorState === 'IDLE') {
             this.checkItems.forEach(item => item.obj.setText(`[ ] ${item.key}`).setStyle({ fill: '#888' }));
-            
+
             if (this.course.holes.length === 0) {
                 this.checklistTitle.setText('START FIRST HOLE');
                 this.checklistTitle.setStyle({ fill: '#27ae60' }); // Green prompt
@@ -1604,7 +2128,7 @@ export default class LevelEditorScene extends Phaser.Scene {
 
         const isTeeDone = this.currentHole && this.currentHole.tee;
         const isCupDone = this.currentHole && this.currentHole.cup;
-        
+
         // "Build Hole" is just an informative step now, mark as active if construction started
         const isBuilding = this.editorState === 'CONSTRUCTING';
 
@@ -1625,23 +2149,68 @@ export default class LevelEditorScene extends Phaser.Scene {
     updatePreview(tile) {
         const gridX = tile.getData('gridX');
         const gridY = tile.getData('gridY');
-        
+
         if (gridX === undefined || gridY === undefined) return;
 
+        // If a confirmation modal is open, freeze hover updates so the temporary clone remains fixed
+        if (this.confirmationModal) return;
+
         const type = this.selectedTileType;
-        
+
         if (type === 'height_up' || type === 'height_down') {
             this.previewActor.setVisible(false);
             return;
         }
 
+        // Building footprint preview
+        if (BUILDING_NAMES.includes(type)) {
+            const bDef = BUILDING_TYPES[type];
+            const startX = gridX - Math.floor(bDef.size.tilesW / 2);
+            const startY = gridY - Math.floor(bDef.size.tilesH / 2);
+
+            // Out of bounds
+            if (startX < 0 || startY < 0 || (startX + bDef.size.tilesW) > GRID_SIZE.width || (startY + bDef.size.tilesH) > GRID_SIZE.height) {
+                this.previewActor.setVisible(false);
+                return;
+            }
+
+            // Determine occupancy
+            let occupied = false;
+            for (let yy = startY; yy < startY + bDef.size.tilesH; yy++) {
+                for (let xx = startX; xx < startX + bDef.size.tilesW; xx++) {
+                    if (this.gridData[yy][xx].building || (this.gridData[yy][xx].decoration && this.gridData[yy][xx].decoration.texture.key === 'cup')) {
+                        occupied = true; break;
+                    }
+                }
+                if (occupied) break;
+            }
+
+            const centerX = startX + (bDef.size.tilesW / 2) - 0.5;
+            const centerY = startY + (bDef.size.tilesH / 2) - 0.5;
+            const pos = this.gridToIso(centerX, centerY, 0);
+
+            if (this.textures.exists(type)) {
+                this.previewActor.setTexture(type);
+                this.previewActor.setVisible(true);
+                this.previewActor.setOrigin(0.5, 1);
+                this.previewActor.x = pos.x;
+                this.previewActor.y = pos.y;
+                this.previewActor.setDepth(tile.depth + 200);
+                this.previewActor.setTint(occupied ? 0xff0000 : 0x00ff00);
+                this.previewActor.setAlpha(0.6);
+            } else {
+                this.previewActor.setVisible(false);
+            }
+            return;
+        }
+
         this.previewActor.x = tile.x;
         this.previewActor.y = tile.y;
-        
+
         if (this.textures.exists(type)) {
             this.previewActor.setTexture(type);
             this.previewActor.setVisible(true);
-            
+
             if (DECO_NAMES.includes(type)) {
                 this.previewActor.setOrigin(0.5, 1);
                 this.previewActor.setDepth(tile.depth + 100);
@@ -1656,7 +2225,7 @@ export default class LevelEditorScene extends Phaser.Scene {
 
     handleCameraMovement(delta) {
         const speed = 500 * (1 / this.cameras.main.zoom); // Adjust speed based on zoom
-        
+
         let moveX = 0;
         let moveY = 0;
 
@@ -1675,7 +2244,7 @@ export default class LevelEditorScene extends Phaser.Scene {
 
     gridToIso(x, y, height = 0) {
         const centerX = (GRID_SIZE.width * TILE_SIZE.width) / 2;
-        
+
         let rx = x;
         let ry = y;
         const maxW = GRID_SIZE.width - 1;
