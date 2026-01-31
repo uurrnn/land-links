@@ -1,4 +1,4 @@
-import { TILE_TYPES, DECO_TYPES, TILE_SIZE, DECO_NAMES } from '../consts/GameConfig.js';
+import { TILE_TYPES, DECO_TYPES, TILE_SIZE } from '../consts/GameConfig.js';
 
 export default class AssetGenerator {
     constructor(scene) {
@@ -6,25 +6,28 @@ export default class AssetGenerator {
     }
 
     generateAll() {
-        this.generateTiles();
-        this.generateDecorations();
-        this.generateActors();
-        this.generateBackground();
+        const gfx = this.scene.add.graphics();
+        this.generateTiles(gfx);
+        this.generateDecorations(gfx);
+        this.generateActors(gfx);
+        this.generateBackground(gfx);
+        gfx.destroy();
     }
 
-    generateTiles() {
-        const gfx = this.scene.add.graphics();
+    removeIfExists(key) {
+        if (this.scene.textures.exists(key)) this.scene.textures.remove(key);
+    }
+
+    generateTiles(gfx) {
         const { width, height } = TILE_SIZE;
 
         for (const [key, color] of Object.entries(TILE_TYPES)) {
-            if (this.scene.textures.exists(key)) {
-                this.scene.textures.remove(key);
-            }
+            this.removeIfExists(key);
 
             gfx.clear();
             gfx.fillStyle(color);
             gfx.lineStyle(1, color); // Stroke with same color to fill sub-pixel gaps
-    
+
             // Draw diamond shape
             gfx.beginPath();
             gfx.moveTo(0, height / 2);
@@ -39,7 +42,7 @@ export default class AssetGenerator {
             if (key === 'fairway') {
                 const numStripes = 4;
                 const altColor = 0x4a852a; // Darker green
-                
+
                 for (let i = 0; i < numStripes; i++) {
                     if (i % 2 === 0) continue; // Skip base color (already drawn)
 
@@ -68,14 +71,14 @@ export default class AssetGenerator {
                     gfx.fillPath();
                 }
             }
-    
+
             if (key === 'tee') {
                 gfx.fillStyle(0xffffff);
                 const markerRadius = 2;
                 // Markers
                 gfx.fillEllipse(width * 0.25, height * 0.5, markerRadius * 2, markerRadius);
                 gfx.fillEllipse(width * 0.75, height * 0.5, markerRadius * 2, markerRadius);
-                
+
                 gfx.lineStyle(1, 0x888888);
                 gfx.strokeEllipse(width * 0.25, height * 0.5, markerRadius * 2, markerRadius);
                 gfx.strokeEllipse(width * 0.75, height * 0.5, markerRadius * 2, markerRadius);
@@ -83,21 +86,19 @@ export default class AssetGenerator {
 
             gfx.generateTexture(key, width, height);
         }
-        gfx.destroy();
     }
 
-    generateDecorations() {
-        const gfx = this.scene.add.graphics();
+    generateDecorations(gfx) {
         for (const [key, value] of Object.entries(DECO_TYPES)) {
-            if (this.scene.textures.exists(key)) this.scene.textures.remove(key);
+            this.removeIfExists(key);
 
             gfx.clear();
             gfx.fillStyle(value.color);
-            
+
             if (key === 'cup') {
                 const centerX = value.size.w / 2;
                 const centerY = value.size.h - 4;
-                
+
                 // Cup
                 gfx.fillStyle(0x000000);
                 gfx.fillEllipse(centerX, centerY, 8, 4);
@@ -117,46 +118,37 @@ export default class AssetGenerator {
             }
             gfx.generateTexture(key, value.size.w, value.size.h);
         }
-        gfx.destroy();
     }
 
-    generateActors() {
-        const gfx = this.scene.add.graphics();
-
+    generateActors(gfx) {
         // Golfer
-        if (this.scene.textures.exists('golfer')) this.scene.textures.remove('golfer');
+        this.removeIfExists('golfer');
         gfx.clear();
         gfx.fillStyle(0x3498db); // Blue shirt
-        gfx.fillRect(8, 16, 16, 24); 
+        gfx.fillRect(8, 16, 16, 24);
         gfx.fillStyle(0xe0ac69); // Skin
-        gfx.fillCircle(16, 8, 8); 
+        gfx.fillCircle(16, 8, 8);
         gfx.fillStyle(0x333333); // Pants
-        gfx.fillRect(8, 40, 16, 8); 
+        gfx.fillRect(8, 40, 16, 8);
         gfx.lineStyle(2, 0x999999);
         gfx.lineBetween(16, 30, 32, 30);
         gfx.generateTexture('golfer', 40, 48);
 
         // Ball
-        if (this.scene.textures.exists('ball')) this.scene.textures.remove('ball');
+        this.removeIfExists('ball');
         gfx.clear();
         gfx.fillStyle(0xffffff);
         gfx.fillCircle(4, 4, 3);
         gfx.lineStyle(1, 0x888888);
         gfx.strokeCircle(4, 4, 3);
         gfx.generateTexture('ball', 8, 8);
-        
-        gfx.destroy();
     }
 
-    generateBackground() {
-        const gfx = this.scene.add.graphics();
-        if (this.scene.textures.exists('bg')) this.scene.textures.remove('bg');
-        
+    generateBackground(gfx) {
+        this.removeIfExists('bg');
         gfx.clear();
         gfx.fillStyle(0x4CB7E1);
         gfx.fillRect(0, 0, 64, 64);
         gfx.generateTexture('bg', 64, 64);
-        
-        gfx.destroy();
     }
 }

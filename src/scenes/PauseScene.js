@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import Button from '../ui/Button.js';
+import { TEXT_STYLES } from '../consts/GameConfig.js';
 
 export default class PauseScene extends Phaser.Scene {
     constructor() {
@@ -7,19 +8,10 @@ export default class PauseScene extends Phaser.Scene {
     }
 
     create() {
-        // Semi-transparent background
         const { width, height } = this.cameras.main;
         this.add.rectangle(width / 2, height / 2, width, height, 0x000000, 0.7);
 
-        // Title
-        this.add.text(width / 2, 80, 'PAUSED', {
-            fontFamily: '"Outfit", sans-serif',
-            fontSize: '64px', 
-            fill: '#fff', 
-            fontStyle: 'bold', 
-            stroke: '#000', 
-            strokeThickness: 6 
-        }).setOrigin(0.5);
+        this.add.text(width / 2, 80, 'PAUSED', { ...TEXT_STYLES.title }).setOrigin(0.5);
 
         // Resume Button
         new Button(this, width / 2, height / 2 - 50, 'Resume', () => {
